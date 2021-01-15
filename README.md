@@ -1,3 +1,5 @@
+This version here is only for building for armhf.
+
 ebusd - eBUS daemon
 ===================
 

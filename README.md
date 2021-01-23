@@ -1,3 +1,5 @@
+This version here is only for building for armhf.
+
 ebusd - eBUS daemon
 ===================
 
@@ -14,7 +16,7 @@ Features
 
 The main features of the daemon are:
 
- * use USB serial, TCP connected, or UDP device
+ * use USB serial, TCP connected or UDP device, or enhanced ebusd protocol for recent [ebus adapter 3](https://adapter.ebusd.eu/) or [ebusd-esp firmware](https://github.com/john30/ebusd-esp/) (allows arbitration to be done directly by the hardware)
  * actively send messages to and receive answers from the eBUS
  * passively listen to messages sent on the eBUS
  * regularly poll for messages

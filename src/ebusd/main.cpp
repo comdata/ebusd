@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -82,11 +82,12 @@ static struct options opt = {
   0,  // extraLatency
 
   CONFIG_PATH,  // configPath
+  "",  // overridePath
   false,  // scanConfig
   0,  // initialScan
   getenv("LANG"),  // preferLanguage
   false,  // checkConfig
-  false,  // dumpConfig
+  OF_NONE,  // dumpConfig
   5,  // pollInterval
   false,  // injectMessages
 
@@ -135,6 +136,9 @@ static MainLoop* s_mainLoop = nullptr;
 /** the path prefix (including trailing "/") for retrieving configuration files from local files (empty for HTTP). */
 static string s_configLocalPrefix;
 
+/** the path prefix (including trailing "/") for overriding configuration files from local files (empty if unset). */
+static string s_configOverridePrefix;
+
 /** the URI prefix (including trailing "/") for retrieving configuration files from HTTP (empty for local files). */
 static string s_configUriPrefix;
 
@@ -180,7 +184,9 @@ static const char argpdoc[] =
 /** the definition of the known program arguments. */
 static const struct argp_option argpoptions[] = {
   {nullptr,          0,        nullptr,    0, "Device options:", 1 },
-  {"device",         'd',      "DEV",      0, "Use DEV as eBUS device (serial or [udp:]ip:port) [/dev/ttyUSB0]", 0 },
+  {"device",         'd',      "DEV",      0, "Use DEV as eBUS device ("
+      "\"enh:DEVICE\" or \"enh:IP:PORT\" for enhanced device,"
+      "\"DEVICE\" for serial device, or \"[udp:]IP:PORT\" for network device) [/dev/ttyUSB0]", 0 },
   {"nodevicecheck",  'n',      nullptr,    0, "Skip serial eBUS device test", 0 },
   {"readonly",       'r',      nullptr,    0, "Only read from device, never write to it", 0 },
   {"initsend",       O_INISND, nullptr,    0, "Send an initial escape symbol after connecting device", 0 },
@@ -189,14 +195,15 @@ static const struct argp_option argpoptions[] = {
   {nullptr,          0,        nullptr,    0, "Message configuration options:", 2 },
   {"configpath",     'c',      "PATH",     0, "Read CSV config files from PATH (local folder or HTTP URL) [" CONFIG_PATH
       "]", 0 },
+  {"overridepath",   'o',      "PATH",     0, "Read override CSV config files from PATH (local folder only) []", 0 },
   {"scanconfig",     's',      "ADDR", OPTION_ARG_OPTIONAL, "Pick CSV config files matching initial scan (ADDR="
       "\"none\" or empty for no initial scan message, \"full\" for full scan, or a single hex address to scan, "
       "default is broadcast ident message). If combined with --checkconfig, you can add scan message data as "
       "arguments for checking a particular scan configuration, e.g. \"FF08070400/0AB5454850303003277201\".", 0 },
   {"configlang",     O_CFGLNG, "LANG",     0,
       "Prefer LANG in multilingual configuration files [system default language]", 0 },
-  {"checkconfig",    O_CHKCFG, nullptr,    0, "Check CSV config files, then stop", 0 },
-  {"dumpconfig",     O_DMPCFG, nullptr,    0, "Check and dump CSV config files, then stop", 0 },
+  {"checkconfig",    O_CHKCFG, nullptr,    0, "Check config files, then stop", 0 },
+  {"dumpconfig",     O_DMPCFG, "FORMAT", OPTION_ARG_OPTIONAL, "Check and dump config files in FORMAT (\"json\" or \"csv\"), then stop", 0 },
   {"pollinterval",   O_POLINT, "SEC",      0, "Poll for data every SEC seconds (0=disable) [5]", 0 },
   {"inject",         'i',      nullptr,    0, "Inject remaining arguments as already seen messages (e.g. "
       "\"FF08070400/0AB5454850303003277201\")", 0 },
@@ -227,8 +234,8 @@ static const struct argp_option argpoptions[] = {
   {nullptr,          0,        nullptr,    0, "Log options:", 5 },
   {"logfile",        'l',      "FILE",     0, "Write log to FILE (only for daemon, empty string for using syslog) ["
       PACKAGE_LOGFILE "]", 0 },
-  {"log",            O_LOG, "AREAS LEVEL", 0, "Only write log for matching AREA(S) below or equal to LEVEL"
-      " (alternative to --logareas/--logevel, may be used multiple times) [all notice]", 0 },
+  {"log",            O_LOG, "AREAS:LEVEL", 0, "Only write log for matching AREA(S) below or equal to LEVEL"
+      " (alternative to --logareas/--logevel, may be used multiple times) [all:notice]", 0 },
   {"logareas",       O_LOGARE, "AREAS",    0, "Only write log for matching AREA(S): main|network|bus|update|other"
       "|all [all]", 0 },
   {"loglevel",       O_LOGLEV, "LEVEL",    0, "Only write log below or equal to LEVEL: error|notice|info|debug"
@@ -313,6 +320,13 @@ error_t parse_opt(int key, char *arg, struct argp_state *state) {
     }
     opt->configPath = arg;
     break;
+  case 'o':  // --overridepath=/etc/ebusd/
+    if (arg == nullptr || arg[0] == 0 || strcmp("/", arg) == 0) {
+      argp_error(state, "invalid overridepath");
+      return EINVAL;
+    }
+    opt->overridePath = arg;
+    break;
   case 's':  // --scanconfig[=ADDR] (ADDR=<empty>|full|<hexaddr>)
     opt->scanConfig = true;
     if (opt->pollInterval == 0) {
@@ -344,9 +358,17 @@ error_t parse_opt(int key, char *arg, struct argp_state *state) {
   case O_CHKCFG:  // --checkconfig
     opt->checkConfig = true;
     break;
-  case O_DMPCFG:  // --dumpconfig
+  case O_DMPCFG:  // --dumpconfig[=json|csv]
+    opt->dumpConfig = OF_DEFINITION;
+    if (!arg || arg[0] == 0 || strcmp("csv", arg) == 0) {
+      // no further flags
+    } else if (strcmp("json", arg) == 0) {
+      opt->dumpConfig |= OF_NAMES | OF_UNITS | OF_COMMENTS | OF_VALUENAME | OF_ALL_ATTRS | OF_JSON;
+    } else {
+      argp_error(state, "invalid dumpconfig");
+      return EINVAL;
+    }
     opt->checkConfig = true;
-    opt->dumpConfig = true;
     break;
   case O_POLINT:  // --pollinterval=5
     opt->pollInterval = parseInt(arg, 10, 0, 3600, &result);
@@ -501,12 +523,15 @@ error_t parse_opt(int key, char *arg, struct argp_state *state) {
     }
     opt->logFile = arg;
     break;
-  case O_LOG:  // --log=area(s) level
+  case O_LOG:  // --log=area(s):level
     {
-      char* pos = strchr(arg, ' ');
+      char* pos = strchr(arg, ':');
       if (pos == nullptr) {
-        argp_error(state, "invalid log");
-        return EINVAL;
+        pos = strchr(arg, ' ');
+        if (pos == nullptr) {
+          argp_error(state, "invalid log");
+          return EINVAL;
+        }
       }
       *pos = 0;
       int facilities = parseLogFacilities(arg);
@@ -683,7 +708,7 @@ void shutdown(bool error = false) {
     s_messageMap = nullptr;
   }
   // free templates
-  for (const auto it : s_templatesByPath) {
+  for (const auto& it : s_templatesByPath) {
     if (it.second != &s_globalTemplates) {
       delete it.second;
     }
@@ -751,10 +776,11 @@ void signalHandler(int sig) {
  * @return the result code.
  */
 static result_t collectConfigFiles(const string& relPath, const string& prefix, const string& extension,
-    vector<string>* files, const bool ignoreAddressPrefix = false, const string& query = "",
-    vector<string>* dirs = nullptr, bool* hasTemplates = nullptr) {
+                                   bool fromOverride, vector<string>* files,
+                                   bool ignoreAddressPrefix = false, const string& query = "",
+                                   vector<string>* dirs = nullptr, bool* hasTemplates = nullptr) {
   const string relPathWithSlash = relPath.empty() ? "" : relPath + "/";
-  if (!s_configUriPrefix.empty()) {
+  if (!fromOverride && !s_configUriPrefix.empty()) {
     string uri = s_configUriPrefix + relPathWithSlash + "?t=" + extension.substr(1) + query;
     string names;
     if (!s_configHttpClient.get(uri, "", &names)) {
@@ -779,7 +805,7 @@ static result_t collectConfigFiles(const string& relPath, const string& prefix, 
     }
     return RESULT_OK;
   }
-  const string path = s_configLocalPrefix + relPathWithSlash;
+  const string path = (fromOverride ? s_configOverridePrefix : s_configLocalPrefix) + relPathWithSlash;
   DIR* dir = opendir(path.c_str());
   if (dir == nullptr) {
     return RESULT_ERR_NOTFOUND;
@@ -888,16 +914,17 @@ static bool readTemplates(const string relPath, const string extension, bool ava
  * @param relPath the relative path from which to read the files (without trailing "/").
  * @param extension the filename extension of the files to read.
  * @param messages the @a MessageMap to load the messages into.
+ * @param fromOverride whether to load from the override path.
  * @param recursive whether to load all files recursively.
  * @param verbose whether to verbosely log problems.
  * @param errorDescription a string in which to store the error description in case of error.
  * @return the result code.
  */
-static result_t readConfigFiles(const string& relPath, const string& extension, const bool recursive,
-    const bool verbose, string* errorDescription, MessageMap* messages) {
+static result_t readConfigFiles(const string& relPath, const string& extension, bool fromOverride, bool recursive,
+                                bool verbose, string* errorDescription, MessageMap* messages) {
   vector<string> files, dirs;
   bool hasTemplates = false;
-  result_t result = collectConfigFiles(relPath, "", extension, &files, false, "", &dirs, &hasTemplates);
+  result_t result = collectConfigFiles(relPath, "", extension, fromOverride, &files, false, "", &dirs, &hasTemplates);
   if (result != RESULT_OK) {
     return result;
   }
@@ -913,7 +940,7 @@ static result_t readConfigFiles(const string& relPath, const string& extension, 
   if (recursive) {
     for (const auto& name : dirs) {
       logInfo(lf_main, "reading dir  %s", name.c_str());
-      result = readConfigFiles(name, extension, true, verbose, errorDescription, messages);
+      result = readConfigFiles(name, extension, fromOverride, true, verbose, errorDescription, messages);
       if (result != RESULT_OK) {
         return result;
       }
@@ -995,13 +1022,24 @@ result_t loadConfigFiles(MessageMap* messages, bool verbose, bool denyRecursive)
   s_templatesByPath.clear();
 
   string errorDescription;
-  result_t result = readConfigFiles("", ".csv",
+  result_t result = readConfigFiles("", ".csv", false,
       (!opt.scanConfig || opt.checkConfig) && !denyRecursive, verbose, &errorDescription, messages);
   if (result == RESULT_OK) {
     logInfo(lf_main, "read config files");
   } else {
     logError(lf_main, "error reading config files from %s: %s, last error: %s", opt.configPath,
         getResultCode(result), errorDescription.c_str());
+  }
+  if (s_configOverridePrefix.length() > 0) {
+    logInfo(lf_main, "loading override config files from %s", opt.overridePath);
+    result = readConfigFiles("", ".csv", true,
+        (!opt.scanConfig || opt.checkConfig) && !denyRecursive, verbose, &errorDescription, messages);
+    if (result == RESULT_OK) {
+      logInfo(lf_main, "read override config files");
+    } else {
+      logError(lf_main, "error reading config files from %s: %s, last error: %s", opt.overridePath,
+          getResultCode(result), errorDescription.c_str());
+    }
   }
   messages->unlock();
   return opt.checkConfig ? result : RESULT_OK;
@@ -1024,7 +1062,7 @@ result_t loadScanConfigFile(MessageMap* messages, symbol_t address, bool verbose
   size_t offset = 0;
   size_t field = 0;
   bool fromLocal = s_configUriPrefix.empty();
-  result_t result = (*identFields)[field]->read(data, offset, false, nullptr, -1, 0, -1, &out);  // manufacturer name
+  result_t result = (*identFields)[field]->read(data, offset, false, nullptr, -1, OF_NONE, -1, &out);  // manufacturer name
   if (result == RESULT_ERR_NOTFOUND && fromLocal) {
     result = (*identFields)[field]->read(data, offset, false, nullptr, -1, OF_NUMERIC, -1, &out);  // manufacturer name
   }
@@ -1037,7 +1075,7 @@ result_t loadScanConfigFile(MessageMap* messages, symbol_t address, bool verbose
     out.str("");
     out.clear();
     offset += (*identFields)[field++]->getLength(pt_slaveData, MAX_LEN);
-    result = (*identFields)[field]->read(data, offset, false, nullptr, -1, 0, -1, &out);  // identification string
+    result = (*identFields)[field]->read(data, offset, false, nullptr, -1, OF_NONE, -1, &out);  // identification string
   }
   if (result == RESULT_OK) {
     ident = out.str();
@@ -1085,7 +1123,7 @@ result_t loadScanConfigFile(MessageMap* messages, symbol_t address, bool verbose
     out.str("");
     out.clear();
   }
-  result = collectConfigFiles(manufStr, addrStr + ".", ".csv", &files, false, query, nullptr, &hasTemplates);
+  result = collectConfigFiles(manufStr, addrStr + ".", ".csv", false, &files, false, query, nullptr, &hasTemplates);
   if (result != RESULT_OK) {
     logError(lf_main, "unable to load scan config %2.2x: list files in %s %s", address, manufStr.c_str(),
         getResultCode(result));
@@ -1148,7 +1186,7 @@ result_t loadScanConfigFile(MessageMap* messages, symbol_t address, bool verbose
   // found the right file. load the templates if necessary, then load the file itself
   bool readCommon = readTemplates(manufStr, ".csv", hasTemplates, opt.checkConfig);
   if (readCommon) {
-    result = collectConfigFiles(manufStr, "", ".csv", &files, true, "&a=-");
+    result = collectConfigFiles(manufStr, "", ".csv", false, &files, true, "&a=-");
     if (result == RESULT_OK && !files.empty()) {
       for (const auto& name : files) {
         string baseName = name.substr(manufStr.length()+1, name.length()-manufStr.length()-strlen(".csv"));  // *.
@@ -1254,6 +1292,11 @@ int main(int argc, char* argv[]) {
     }
     s_configHttpClient.disconnect();
   }
+  configPath = string(opt.overridePath);
+  if (configPath.length() > 0) {
+    configPath[configPath.length()-1] == '/' ? configPath : configPath + "/";
+  }
+  s_configOverridePrefix = configPath;
   if (!opt.readOnly && opt.scanConfig && opt.initialScan == 0) {
     opt.initialScan = BROADCAST;
   }
@@ -1302,7 +1345,7 @@ int main(int argc, char* argv[]) {
     }
     if (result == RESULT_OK && opt.dumpConfig) {
       logNotice(lf_main, "configuration dump:");
-      s_messageMap->dump(true, &cout);
+      s_messageMap->dump(true, opt.dumpConfig, &cout);
     }
 
     shutdown(overallResult != RESULT_OK);
@@ -1329,10 +1372,14 @@ int main(int argc, char* argv[]) {
   signal(SIGINT, signalHandler);
   signal(SIGTERM, signalHandler);
 
-  logNotice(lf_main, PACKAGE_STRING "." REVISION " started%s",
+  logNotice(lf_main, PACKAGE_STRING "." REVISION " started%s%s on%s device %s",
+      device->isReadOnly() ? " read only" : "",
       opt.scanConfig ? opt.initialScan == ESC ? " with auto scan"
       : opt.initialScan == BROADCAST ? " with broadcast scan" : opt.initialScan == SYN ? " with full scan"
-      : " with single scan" : "");
+      : " with single scan" : "",
+      device->isEnhancedProto() ? " enhanced" : "",
+      device->getName()
+  );
 
   // load configuration files
   loadConfigFiles(s_messageMap);
@@ -1341,10 +1388,10 @@ int main(int argc, char* argv[]) {
   s_mainLoop = new MainLoop(opt, device, s_messageMap);
   if (opt.injectMessages) {
     BusHandler* busHandler = s_mainLoop->getBusHandler();
-    MasterSymbolString master;
-    SlaveSymbolString slave;
     while (arg_index < argc) {
       // add each passed message
+      MasterSymbolString master;
+      SlaveSymbolString slave;
       if (!parseMessage(argv[arg_index++], false, &master, &slave)) {
         continue;
       }

@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2015-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2015-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -60,6 +60,8 @@ namespace ebusd {
 #define ENH_RES_RECEIVED ((uint8_t)0x1)
 #define ENH_REQ_START ((uint8_t)0x2)
 #define ENH_RES_STARTED ((uint8_t)0x2)
+#define ENH_REQ_INFO ((uint8_t)0x3)
+#define ENH_RES_INFO ((uint8_t)0x3)
 #define ENH_RES_FAILED ((uint8_t)0xa)
 #define ENH_RES_ERROR_EBUS ((uint8_t)0xb)
 #define ENH_RES_ERROR_HOST ((uint8_t)0xc)
@@ -77,9 +79,10 @@ namespace ebusd {
 Device::Device(const char* name, bool checkDevice, unsigned int latency, bool readOnly, bool initialSend,
     bool enhancedProto)
   : m_name(name), m_checkDevice(checkDevice),
-    m_latency(HOST_LATENCY_MS+latency), m_readOnly(readOnly), m_initialSend(initialSend),
+    m_latency(HOST_LATENCY_MS+(enhancedProto?ENHANCED_LATENCY_MS:0)+latency), m_readOnly(readOnly), m_initialSend(initialSend),
     m_enhancedProto(enhancedProto), m_fd(-1), m_listener(nullptr), m_arbitrationMaster(SYN),
-    m_arbitrationCheck(false), m_bufSize(((MAX_LEN+1+3)/4)*4), m_bufLen(0), m_bufPos(0) {
+    m_arbitrationCheck(false), m_bufSize(((MAX_LEN+1+3)/4)*4), m_bufLen(0), m_bufPos(0),
+    m_extraFatures(0), m_infoId(0xff), m_infoLen(0), m_infoPos(0) {
   m_buffer = reinterpret_cast<symbol_t*>(malloc(m_bufSize));
   if (!m_buffer) {
     m_bufSize = 0;
@@ -141,8 +144,12 @@ result_t Device::open() {
 
 result_t Device::afterOpen() {
   m_bufLen = 0;
+  m_extraFatures = 0;
   if (m_enhancedProto) {
-    symbol_t buf[2] = makeEnhancedSequence(ENH_REQ_INIT, 0);  // TODO define additional feature flags
+    symbol_t buf[2] = makeEnhancedSequence(ENH_REQ_INIT, 0x01);  // extra feature: info
+#ifdef DEBUG_RAW_TRAFFIC
+    fprintf(stdout, "raw enhanced > %2.2x %2.2x\n", buf[0], buf[1]);
+#endif
     if (::write(m_fd, buf, 2) != 2) {
       return RESULT_ERR_SEND;
     }
@@ -171,6 +178,69 @@ bool Device::isValid() {
     checkDevice();
   }
   return m_fd != -1;
+}
+
+result_t Device::requestEnhancedInfo(symbol_t infoId) {
+  if (!m_enhancedProto || m_extraFatures == 0 || infoId == 0xff) {
+    return RESULT_ERR_INVALID_ARG;
+  }
+  for (unsigned int i=0; i<4; i++) {
+    if (m_infoId == 0xff) {
+      break;
+    }
+    usleep(40000 + i*40000);
+  }
+  if (m_infoId != 0xff) {
+    return RESULT_ERR_DUPLICATE;
+  }
+  symbol_t buf[2] = makeEnhancedSequence(ENH_REQ_INFO, infoId);
+#ifdef DEBUG_RAW_TRAFFIC
+  fprintf(stdout, "raw enhanced > %2.2x %2.2x\n", buf[0], buf[1]);
+#endif
+  m_infoPos = 0;
+  m_infoId = infoId;
+  if (::write(m_fd, buf, 2) != 2) {
+    return RESULT_ERR_DEVICE;
+  }
+  return RESULT_OK;
+}
+
+string Device::getEnhancedInfos() {
+  if (!m_enhancedProto || m_extraFatures == 0) {
+    return "";
+  }
+  result_t res;
+  if (m_enhInfoTemperature.empty()) {
+    res = requestEnhancedInfo(0);
+    if (res != RESULT_OK) {
+      return "cannot request version";
+    }
+    res = requestEnhancedInfo(1);
+    if (res != RESULT_OK) {
+      return "cannot request ID";
+    }
+    res = requestEnhancedInfo(2);
+    if (res != RESULT_OK) {
+      return "cannot request config";
+    }
+  }
+  res = requestEnhancedInfo(3);
+  if (res != RESULT_OK) {
+    return "cannot request temperature";
+  }
+  res = requestEnhancedInfo(4);
+  if (res != RESULT_OK) {
+    return "cannot request supply voltage";
+  }
+  res = requestEnhancedInfo(5);
+  if (res != RESULT_OK) {
+    return "cannot request bus voltage";
+  }
+  usleep(8*40000);
+  if (m_infoPos == 0) {
+    return "did not get info";
+  }
+  return m_enhInfoTemperature + ", " + m_enhInfoSupplyVoltage + ", " + m_enhInfoBusVoltage;
 }
 
 result_t Device::send(symbol_t value) {
@@ -350,8 +420,14 @@ result_t Device::startArbitration(symbol_t masterAddress) {
 bool Device::write(symbol_t value, bool startArbitration) {
   if (m_enhancedProto) {
     symbol_t buf[2] = makeEnhancedSequence(startArbitration ? ENH_REQ_START : ENH_REQ_SEND, value);
+#ifdef DEBUG_RAW_TRAFFIC
+    fprintf(stdout, "raw enhanced > %2.2x %2.2x\n", buf[0], buf[1]);
+#endif
     return ::write(m_fd, buf, 2) == 2;
   }
+#ifdef DEBUG_RAW_TRAFFIC
+  fprintf(stdout, "raw > %2.2x\n", value);
+#endif
   return ::write(m_fd, &value, 1) == 1;
 }
 
@@ -519,9 +595,59 @@ bool Device::read(symbol_t* value, bool isAvailable, ArbitrationState* arbitrati
           m_arbitrationMaster = SYN;
           m_arbitrationCheck = false;
         }
-        // TODO define additional feature flags
+        m_extraFatures = data;
         if (m_listener != nullptr) {
-          m_listener->notifyStatus(false, "reset");
+          m_listener->notifyStatus(false, (m_extraFatures&0x01) ? "reset, supports info" : "reset");
+        }
+        break;
+      case ENH_RES_INFO:
+        if (m_infoLen == 0) {
+          if (data<=16) { // max length
+            m_infoLen = data;
+            m_infoPos = 0;
+          }
+        } else if (m_infoPos < m_infoLen) {
+          m_infoBuf[m_infoPos++] = data;
+          if (m_infoPos >= m_infoLen) {
+            unsigned int val;
+            ostringstream stream;
+            switch ((m_infoLen<<8) | m_infoId) {
+              case 0x0200:
+                stream << "firmware " << static_cast<unsigned>(m_infoBuf[0]) << "." << std::hex << static_cast<unsigned>(m_infoBuf[1]);
+                break;
+              case 0x0901:
+              case 0x0802:
+                stream << (m_infoId == 1 ? "ID" : "config");
+                stream << std::hex << std::setfill('0');
+                for (uint8_t pos = 0; pos<m_infoPos; pos++) {
+                  stream << " " << std::setw(2) << static_cast<unsigned>(m_infoBuf[pos]);
+                }
+                break;
+              case 0x0203:
+                val = (static_cast<unsigned>(m_infoBuf[0])<<8) | static_cast<unsigned>(m_infoBuf[1]);
+                stream << "temperature " << static_cast<unsigned>(val) << " °C";
+                m_enhInfoTemperature = stream.str();
+                break;
+              case 0x0204:
+                val = (static_cast<unsigned>(m_infoBuf[0])<<8) | static_cast<unsigned>(m_infoBuf[1]);
+                stream << "supply voltage " << static_cast<unsigned>(val) << " mV";
+                m_enhInfoSupplyVoltage = stream.str();
+                break;
+              case 0x0205:
+                stream << "bus voltage " << std::fixed << std::setprecision(1)
+                       << static_cast<float>(m_infoBuf[1] / 10.0) << " V - "
+                       << static_cast<float>(m_infoBuf[0] / 10.0) << " V";
+                m_enhInfoBusVoltage = stream.str();
+                break;
+              default:
+                stream << "unknown 0x" << std::hex << std::setfill('0') << std::setw(2) << static_cast<unsigned>(m_infoId)
+                       << ", len " << std::dec << std::setw(0) << static_cast<unsigned>(m_infoPos);
+                break;
+            }
+            m_listener->notifyStatus(false, ("extra info: "+stream.str()).c_str());
+            m_infoLen = 0;
+            m_infoId = 0xff;
+          }
         }
         break;
       case ENH_RES_ERROR_EBUS:

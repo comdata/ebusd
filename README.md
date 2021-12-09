@@ -6,9 +6,13 @@ ebusd - eBUS daemon
 ebusd is a daemon for handling communication with eBUS devices connected to a
 2-wire bus system ("energy bus" used by numerous heating systems).
 
-[![Build Status](https://travis-ci.org/john30/ebusd.svg?branch=master)](https://travis-ci.org/john30/ebusd)
+[![Build](https://github.com/john30/ebusd/actions/workflows/build.yml/badge.svg)](https://github.com/john30/ebusd/actions/workflows/build.yml)
+[![Coverage](https://github.com/john30/ebusd/actions/workflows/coverage.yml/badge.svg)](https://github.com/john30/ebusd/actions/workflows/coverage.yml)
 [![codecov](https://codecov.io/gh/john30/ebusd/branch/master/graph/badge.svg)](https://codecov.io/gh/john30/ebusd)
 [![Gitter](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/john30/ebusd?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+[![Release Downloads](https://img.shields.io/github/downloads/john30/ebusd/total)](https://github.com/john30/ebusd/releases/latest)
+[![Docker Downloads](https://img.shields.io/docker/pulls/john30/ebusd)](https://hub.docker.com/repository/docker/john30/ebusd)
+[![Release](https://img.shields.io/github/v/release/john30/ebusd)](https://github.com/john30/ebusd/releases/latest)
 
 
 Features
@@ -16,7 +20,13 @@ Features
 
 The main features of the daemon are:
 
- * use USB serial, TCP connected or UDP device, or enhanced ebusd protocol for recent [ebus adapter 3](https://adapter.ebusd.eu/) or [ebusd-esp firmware](https://github.com/john30/ebusd-esp/) (allows arbitration to be done directly by the hardware)
+ * use one of these device connections:
+   * USB serial
+   * TCP
+   * UDP
+   * enhanced ebusd protocol allowing arbitration to be done directly by the hardware, e.g. for recent
+     * [ebus adapter 3](https://adapter.ebusd.eu/), or
+     * [ebusd-esp firmware](https://github.com/john30/ebusd-esp/)
  * actively send messages to and receive answers from the eBUS
  * passively listen to messages sent on the eBUS
  * regularly poll for messages
@@ -32,6 +42,7 @@ The main features of the daemon are:
  * dump received bytes to binary files for later playback/analysis
  * listen for command line client connections on a dedicated TCP port
  * optionally provide rudimentary HTML interface and allow data retrieval as JSON on HTTP port
+ * optionally format messages and data in JSON on dedicated HTTP port
  * optionally publish received message data to MQTT topics and vice versa (if authorized)
  * optional user authentication via ACL file for access to certain messages
 
@@ -39,8 +50,9 @@ The main features of the daemon are:
 Installation
 ------------
 
-Either pick the [latest release package](https://github.com/john30/ebusd/releases/latest)
-suitable for your system, use the Debian repository as [described here](https://github.com/john30/ebusd-debian/blob/master/README.md), or build it yourself.
+Either pick the [latest release package](https://github.com/john30/ebusd/releases/latest) suitable for your system,
+use the Debian repository as [described here](https://github.com/john30/ebusd-debian/blob/master/README.md),
+build it yourself, or use a docker image (see below).
 
 Building ebusd from the source requires the following packages and/or features:
  * autoconf (>=2.63) + automake (>=1.11) or cmake
@@ -52,8 +64,11 @@ Building ebusd from the source requires the following packages and/or features:
 
 To start the build process, run these commands:  
 > ./autogen.sh  
-> make install  
+> make install-strip  
 
+Or alternatively with cmake:  
+> cmake .  
+> make install/strip  
 
 Documentation
 -------------
@@ -74,7 +89,7 @@ the latest configuration files** that are reflected by the configuration reposit
 Docker image
 ------------
 
-A Docker image using the config web service for retrieving the latest message configuration files is available on the hub.
+A multi-architecture Docker image using the config web service for retrieving the latest message configuration files is  available on the hub.
 You can use it like this:  
 > docker pull john30/ebusd  
 > docker run -it --rm --device=/dev/ttyUSB0 -p 8888 john30/ebusd

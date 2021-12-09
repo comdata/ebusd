@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,6 +28,7 @@ namespace ebusd {
 using std::ostringstream;
 using std::nouppercase;
 using std::setw;
+using std::dec;
 using std::hex;
 using std::setfill;
 
@@ -77,12 +78,12 @@ unsigned int parseInt(const char* str, int base, unsigned int minValue, unsigned
 }
 
 int parseSignedInt(const char* str, int base, int minValue, int maxValue,
-    result_t* result, size_t* length) {
+    result_t* result, size_t* length, bool allowIncomplete) {
   char* strEnd = nullptr;
 
   long ret = strtol(str, &strEnd, base);
 
-  if (strEnd == nullptr || *strEnd != 0) {
+  if (strEnd == nullptr || (!allowIncomplete && *strEnd != 0)) {
     *result = RESULT_ERR_INVALID_NUM;  // invalid value
     return 0;
   }
@@ -155,6 +156,24 @@ const string SymbolString::getStr(size_t skipFirstSymbols) const {
     }
   }
   return sstr.str();
+}
+
+bool SymbolString::dumpJson(bool withSeparator, ostringstream* output) const {
+  if (size() == 0) {
+    return false;
+  }
+  if (withSeparator) {
+    *output << ",\n    ";
+  }
+  *output << "\"" << (isMaster() ? "master" : "slave") << "\": [";
+  for (size_t pos = 0; pos < size(); pos++) {
+    if (pos > 0) {
+      *output << ", ";
+    }
+    *output << dec << static_cast<unsigned>(m_data[pos]);
+  }
+  *output << "]";
+  return true;
 }
 
 symbol_t SymbolString::calcCrc() const {

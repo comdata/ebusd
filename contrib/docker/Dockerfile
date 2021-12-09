@@ -1,35 +1,54 @@
-FROM debian:stretch-slim
+ARG BASE_IMAGE
+
+FROM $BASE_IMAGE as build
 
 RUN apt-get update && apt-get install -y \
-    logrotate libmosquitto1 libstdc++6 libc6 libgcc1 \
+    libmosquitto-dev libstdc++6 libc6 libgcc1 \
     curl \
+    autoconf automake g++ make git \
     && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /build
+
+ARG TARGETARCH
+ARG TARGETVARIANT
+ARG EBUSD_VERSION
+
+ENV EBUSD_ARCH $TARGETARCH$TARGETVARIANT
+ENV EBUSD_VERSION $EBUSD_VERSION
+
+ADD . /build
+RUN ./make_debian.sh
+
+
+
+
+FROM $BASE_IMAGE-slim as image
+
 RUN apt-get update && apt-get install -y \
-    autoconf automake g++ make git \
-    libmosquitto-dev \
+    libmosquitto1 libstdc++6 libc6 libgcc1 \
     && rm -rf /var/lib/apt/lists/*
 
 LABEL maintainer "ebusd@ebusd.eu"
 
-ENV EBUSD_VERSION 21.1
-ENV EBUSD_ARCH armhf
+ARG TARGETARCH
+ARG TARGETVARIANT
+ARG EBUSD_VERSION
+ARG EBUSD_IMAGE
+
+ENV EBUSD_ARCH $TARGETARCH$TARGETVARIANT
+ENV EBUSD_VERSION $EBUSD_VERSION
 
 LABEL version "${EBUSD_VERSION}-${EBUSD_ARCH}-devel"
 
-WORKDIR /build
+COPY --from=build /build/ebusd-*_mqtt1.deb ebusd.deb
 
-RUN (curl -SL https://github.com/john30/ebusd/archive/master.tar.gz \
-    | tar xz --strip-components=1) \
-    && ./autogen.sh \
-    && make install-strip
-
-WORKDIR /
-
-RUN rm -rf /build
+RUN dpkg -i ebusd.deb \
+    && ebusd -V \
+    && rm -f ebusd.deb
 
 EXPOSE 8888
 
-COPY release/docker-entrypoint.sh /
+COPY --from=build /build/contrib/docker/docker-entrypoint.sh /
 ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["-f", "--scanconfig"]

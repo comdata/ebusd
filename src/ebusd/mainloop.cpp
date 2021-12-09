@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -98,10 +98,18 @@ result_t UserList::addFromFile(const string& filename, unsigned int lineNo, map<
 }
 
 
+#define VERBOSITY_0 OF_NONE
+#define VERBOSITY_1 OF_NAMES
+#define VERBOSITY_2 (VERBOSITY_1 | OF_UNITS)
+#define VERBOSITY_3 (VERBOSITY_2 | OF_COMMENTS)
+#define VERBOSITY_4 (VERBOSITY_3 | OF_ALL_ATTRS)
+
+
 MainLoop::MainLoop(const struct options& opt, Device *device, MessageMap* messages)
   : Thread(), m_device(device), m_reconnectCount(0), m_userList(opt.accessLevel), m_messages(messages),
     m_address(opt.address), m_scanConfig(opt.scanConfig), m_initialScan(opt.readOnly ? ESC : opt.initialScan),
     m_polling(opt.pollInterval > 0), m_enableHex(opt.enableHex), m_shutdown(false), m_runUpdateCheck(opt.updateCheck) {
+  m_device->setListener(this);
   // open Device
   result_t result = m_device->open();
   if (result != RESULT_OK) {
@@ -109,7 +117,6 @@ MainLoop::MainLoop(const struct options& opt, Device *device, MessageMap* messag
   } else if (!m_device->isValid()) {
     logError(lf_bus, "device %s not available", m_device->getName());
   }
-  m_device->setListener(this);
   if (opt.dumpFile[0]) {
     m_dumpFile = new RotateFile(opt.dumpFile, opt.dumpSize, false, opt.dumpFlush ? 1 : 16);
     m_dumpFile->setEnabled(opt.dump);
@@ -427,14 +434,14 @@ void MainLoop::run() {
       }
       if (settings.listenWithUnknown || settings.listenOnlyUnknown) {
         if (m_busHandler->isGrabEnabled()) {
-          m_busHandler->formatGrabResult(true, false, &ostream, true, since, now);
+          m_busHandler->formatGrabResult(true, OF_NONE, &ostream, true, since, now);
         } else {
           m_busHandler->enableGrab(true);  // needed for listening to all messages
         }
       }
     } else if (settings.mode == cm_direct) {
       if (m_busHandler->isGrabEnabled()) {
-        m_busHandler->formatGrabResult(false, false, &ostream, true, since, now);
+        m_busHandler->formatGrabResult(false, OF_NONE, &ostream, true, since, now);
       }
     }
     // send result to client
@@ -600,7 +607,7 @@ result_t MainLoop::decodeMessage(const string &data, bool isHttp, bool* connecte
   if (cmd == "G" || cmd == "GRAB") {
     return executeGrab(args, ostream);
   }
-  if (cmd == "DEFINE") {
+  if (cmd == "DEF" || cmd == "DEFINE") {
     if (m_newlyDefinedMessages) {
       return executeDefine(args, ostream);
     }
@@ -642,7 +649,7 @@ result_t MainLoop::decodeMessage(const string &data, bool isHttp, bool* connecte
   return RESULT_OK;
 }
 
-result_t MainLoop::parseHexMaster(const vector<string>& args, size_t argPos, symbol_t srcAddress,
+result_t MainLoop::parseHexMaster(const vector<string>& args, size_t argPos, symbol_t srcAddress, bool autoLength,
     MasterSymbolString* master) {
   ostringstream msg;
   while (argPos < args.size()) {
@@ -651,22 +658,35 @@ result_t MainLoop::parseHexMaster(const vector<string>& args, size_t argPos, sym
     }
     msg << args[argPos++];
   }
-  if (msg.str().size() < 4*2) {  // at least ZZ, PB, SB, NN
+  string str = msg.str();
+  unsigned int length = static_cast<unsigned int>(str.size());
+  if (length < (autoLength ? 3 : 4)*2) {  // at least ZZ, PB, SB[, NN]
     return RESULT_ERR_INVALID_ARG;
   }
   result_t ret;
-  unsigned int length = parseInt(msg.str().substr(3*2, 2).c_str(), 16, 0, MAX_POS, &ret);
-  if (ret != RESULT_OK) {
-    return ret;
+  if (autoLength) {
+    length = length/2 - 3;
+  } else {
+    length = parseInt(str.substr(3*2, 2).c_str(), 16, 0, MAX_POS, &ret);
+    if (ret != RESULT_OK) {
+      return ret;
+    }
   }
-  if ((4+length)*2 != msg.str().size()) {
+  if (((autoLength ? 3 : 4)+length)*2 != str.size()) {
     return RESULT_ERR_INVALID_ARG;
   }
   master->push_back(srcAddress == SYN ? m_address : srcAddress);
-  ret = master->parseHex(msg.str());
+  ret = master->parseHex(str.substr(0, 3*2));
   if (ret == RESULT_OK && !isValidAddress((*master)[1])) {
     ret = RESULT_ERR_INVALID_ADDR;
   }
+  if (ret != RESULT_OK) {
+    return ret;
+  }
+  if (autoLength) {
+    master->push_back(static_cast<symbol_t>(length));
+  }
+  ret = master->parseHex(str.substr(3*2));
   return ret;
 }
 
@@ -689,7 +709,7 @@ result_t MainLoop::executeAuth(const vector<string>& args, string* user, ostring
 result_t MainLoop::executeRead(const vector<string>& args, const string& levels, ostringstream* ostream) {
   size_t argPos = 1;
   bool hex = false, newDefinition = false;
-  OutputFormat verbosity = 0;
+  OutputFormat verbosity = OF_NONE;
   time_t maxAge = 5*60;
   string circuit, params;
   symbol_t srcAddress = SYN, dstAddress = SYN;
@@ -719,21 +739,17 @@ result_t MainLoop::executeRead(const vector<string>& args, const string& levels,
         break;
       }
     } else if (args[argPos] == "-v") {
-      switch (verbosity) {
-      case 0:
-        verbosity = OF_NAMES;
-        break;
-      case OF_NAMES:
-        verbosity |= OF_UNITS;
-        break;
-      case OF_NAMES|OF_UNITS:
-        verbosity |= OF_COMMENTS;
-        break;
+      if ((verbosity & VERBOSITY_3) == VERBOSITY_0) {
+        verbosity |= VERBOSITY_1;
+      } else if ((verbosity & VERBOSITY_3) == VERBOSITY_1) {
+        verbosity |= VERBOSITY_2;
+      } else {
+        verbosity |= VERBOSITY_3;
       }
     } else if (args[argPos] == "-vv") {
-      verbosity |= OF_NAMES|OF_UNITS;
+      verbosity |= VERBOSITY_2;
     } else if (args[argPos] == "-vvv" || args[argPos] == "-V") {
-      verbosity |= OF_NAMES|OF_UNITS|OF_COMMENTS;
+      verbosity |= VERBOSITY_3;
     } else if (args[argPos] == "-n") {
       verbosity = (verbosity & ~OF_VALUENAME) | OF_NUMERIC;
     } else if (args[argPos] == "-N") {
@@ -786,7 +802,7 @@ result_t MainLoop::executeRead(const vector<string>& args, const string& levels,
     }
     argPos++;
   }
-  if ((hex && (newDefinition || verbosity != 0 || !circuit.empty() || !params.empty() || dstAddress != SYN
+  if ((hex && (newDefinition || verbosity != OF_NONE || !circuit.empty() || !params.empty() || dstAddress != SYN
       || pollPriority > 0 || args.size() < argPos + 1))
   || (newDefinition && (hex || !circuit.empty() || pollPriority > 0 || args.size() != argPos + 1))) {
     argPos = 0;  // print usage
@@ -828,7 +844,7 @@ result_t MainLoop::executeRead(const vector<string>& args, const string& levels,
 
   if (hex) {
     MasterSymbolString master;
-    result_t ret = parseHexMaster(args, argPos, srcAddress, &master);
+    result_t ret = parseHexMaster(args, argPos, srcAddress, false, &master);
     if (ret != RESULT_OK) {
       return ret;
     }
@@ -869,7 +885,7 @@ result_t MainLoop::executeRead(const vector<string>& args, const string& levels,
       ret = message->storeLastData(master, slave);
       ostringstream result;
       if (ret == RESULT_OK) {
-        ret = message->decodeLastData(false, nullptr, -1, 0, &result);
+        ret = message->decodeLastData(false, nullptr, -1, OF_NONE, &result);
       }
       if (ret >= RESULT_OK) {
         logInfo(lf_main, "read hex %s %s cache update: %s", message->getCircuit().c_str(), message->getName().c_str(),
@@ -905,8 +921,6 @@ result_t MainLoop::executeRead(const vector<string>& args, const string& levels,
   Message* message;
   result_t ret;
   if (newDefinition) {
-    time_t now;
-    time(&now);
     string errorDescription;
     istringstream defstr("#\n" + args[argPos]);  // ensure first line is not used for determining col names
     m_newlyDefinedMessages->clear();
@@ -1064,7 +1078,7 @@ result_t MainLoop::executeWrite(const vector<string>& args, const string levels,
 
   if (hex && argPos > 0) {
     MasterSymbolString master;
-    result_t ret = parseHexMaster(args, argPos, srcAddress, &master);
+    result_t ret = parseHexMaster(args, argPos, srcAddress, false, &master);
     if (ret != RESULT_OK) {
       return ret;
     }
@@ -1094,7 +1108,7 @@ result_t MainLoop::executeWrite(const vector<string>& args, const string levels,
       ret = message->storeLastData(master, slave);
       ostringstream result;
       if (ret == RESULT_OK) {
-        ret = message->decodeLastData(false, nullptr, -1, 0, &result);
+        ret = message->decodeLastData(false, nullptr, -1, OF_NONE, &result);
       }
       if (ret >= RESULT_OK) {
         logInfo(lf_main, "write hex %s %s cache update: %s", message->getCircuit().c_str(),
@@ -1165,7 +1179,7 @@ result_t MainLoop::executeWrite(const vector<string>& args, const string levels,
     return RESULT_OK;
   }
 
-  ret = message->decodeLastData(false, false, nullptr, -1, 0, ostream);  // decode data
+  ret = message->decodeLastData(false, false, nullptr, -1, OF_NONE, ostream);  // decode data
   if (ret >= RESULT_OK && ostream->str().empty()) {
     logNotice(lf_main, "write %s %s: decode %s", message->getCircuit().c_str(), message->getName().c_str(),
         getResultCode(ret));
@@ -1186,27 +1200,31 @@ result_t MainLoop::executeWrite(const vector<string>& args, const string levels,
 result_t MainLoop::parseHexAndSend(const vector<string>& args, size_t& argPos, bool isDirectMode,
     ostringstream* ostream) {
   symbol_t srcAddress = SYN;
-  if (args.size() > argPos && args[argPos] == "-s") {
-    argPos++;
-    if (argPos >= args.size()) {
+  bool autoLength = false;
+  while (args.size() > argPos && args[argPos][0] == '-') {
+    if (args[argPos] == "-s" && argPos + 1 < args.size()) {
+      result_t ret;
+      argPos++;
+      symbol_t address = (symbol_t)parseInt(args[argPos].c_str(), 16, 0, 0xff, &ret);
+      if (ret != RESULT_OK || !isValidAddress(address, false) || !isMaster(address)) {
+        return RESULT_ERR_INVALID_ADDR;
+      }
+      srcAddress = address == m_address ? SYN : address;
+    } else if (args[argPos] == "-n") {
+      autoLength = true;
+    } else {
       argPos = 0;  // print usage
       return RESULT_OK;
     }
-    result_t ret;
-    symbol_t address = (symbol_t)parseInt(args[argPos].c_str(), 16, 0, 0xff, &ret);
-    if (ret != RESULT_OK || !isValidAddress(address, false) || !isMaster(address)) {
-      return RESULT_ERR_INVALID_ADDR;
-    }
-    srcAddress = address == m_address ? SYN : address;
     argPos++;
   }
-  if (args.size() < argPos + 1 || (args.size() > argPos && args[argPos][0] == '-')) {
+  if (argPos >= args.size()) {
     argPos = 0;  // print usage
     return RESULT_OK;
   }
 
   MasterSymbolString master;
-  result_t ret = parseHexMaster(args, argPos, srcAddress, &master);
+  result_t ret = parseHexMaster(args, argPos, srcAddress, autoLength, &master);
   argPos = args.size();  // mark as successfully parsed
   if (ret != RESULT_OK) {
     return ret;
@@ -1236,12 +1254,14 @@ result_t MainLoop::parseHexAndSend(const vector<string>& args, size_t& argPos, b
 result_t MainLoop::executeHex(const vector<string>& args, ostringstream* ostream) {
   size_t argPos = 1;
   result_t ret = parseHexAndSend(args, argPos, false, ostream);
-  if (argPos == args.size()) {
+  if (argPos != 0 && argPos == args.size()) {
     return ret;
   }
   *ostream << "usage: hex [-s QQ] ZZPBSBNN[DD]*\n"
+              "  or:  hex [-s QQ] -n ZZPBSB[DD]*\n"
               " Send arbitrary data in hex.\n"
               "  -s QQ  override source address QQ\n"
+              "  -n     automatically determine the number of data bytes\n"
               "  ZZ     destination address\n"
               "  PB SB  primary/secondary command byte\n"
               "  NN     number of following data bytes\n"
@@ -1289,9 +1309,11 @@ result_t MainLoop::executeDirect(const vector<string>& args, ClientMode* mode, o
     }
   }
   *ostream << "usage: [-s QQ] ZZPBSBNN[DD]*\n"
+              "  or: [-s QQ] -n ZZPBSB[DD]*\n"
               "  or: stop\n"
               " Send arbitrary data in hex (only if enabled) or stop direct mode.\n"
               "  -s QQ  override source address QQ\n"
+              "  -n     automatically determine the number of data bytes\n"
               "  ZZ     destination address\n"
               "  PB SB  primary/secondary command byte\n"
               "  NN     number of following data bytes\n"
@@ -1304,29 +1326,27 @@ result_t MainLoop::executeFind(const vector<string>& args, const string& levels,
   bool configFormat = false, exact = false, withRead = true, withWrite = false, withPassive = true, first = true,
       onlyWithData = false, hexFormat = false, userLevel = true, withConditions = false;
   string useLevels = levels;
-  OutputFormat verbosity = 0;
+  OutputFormat verbosity = OF_NONE;
   vector<string> fieldNames;
   string circuit;
   vector<symbol_t> id;
   while (args.size() > argPos && args[argPos][0] == '-') {
     if (args[argPos] == "-v") {
-      switch (verbosity) {
-      case 0:
-        verbosity |= OF_NAMES;
-        break;
-      case OF_NAMES:
-        verbosity |= OF_UNITS;
-        break;
-      case OF_NAMES|OF_UNITS:
-        verbosity |= OF_COMMENTS;
-        break;
+      if ((verbosity & VERBOSITY_4) == VERBOSITY_0) {
+        verbosity |= VERBOSITY_1;
+      } else if ((verbosity & VERBOSITY_4) == VERBOSITY_1) {
+        verbosity |= VERBOSITY_2;
+      } else if ((verbosity & VERBOSITY_4) == VERBOSITY_2) {
+        verbosity |= VERBOSITY_3;
+      } else {
+        verbosity |= VERBOSITY_4;
       }
     } else if (args[argPos] == "-vv") {
-      verbosity |= OF_NAMES|OF_UNITS;
+      verbosity |= VERBOSITY_2;
     } else if (args[argPos] == "-vvv") {
-      verbosity |= OF_NAMES|OF_UNITS|OF_COMMENTS;
-    } else if (args[argPos] == "-V") {
-      verbosity |= OF_NAMES|OF_UNITS|OF_COMMENTS|OF_ALL_ATTRS;
+      verbosity |= VERBOSITY_3;
+    } else if (args[argPos] == "-vvvv" || args[argPos] == "-V") {
+      verbosity |= VERBOSITY_4;
     } else if (args[argPos] == "-f") {
       configFormat = true;
       if (hexFormat) {
@@ -1449,12 +1469,12 @@ result_t MainLoop::executeFind(const vector<string>& args, const string& levels,
       if (found) {
         *ostream << endl;
       }
-      message->dump(nullptr, withConditions, ostream);
+      message->dump(nullptr, withConditions, verbosity, ostream);
     } else if (!fieldNames.empty()) {
       if (found) {
         *ostream << endl;
       }
-      message->dump(&fieldNames, withConditions, ostream);
+      message->dump(&fieldNames, withConditions, verbosity, ostream);
     } else {
       if (found) {
         *ostream << endl;
@@ -1475,7 +1495,7 @@ result_t MainLoop::executeFind(const vector<string>& args, const string& levels,
                    << " / " << message->getLastSlaveData().getStr() << ")";
         }
       }
-      if ((verbosity & (OF_NAMES|OF_UNITS|OF_COMMENTS)) == (OF_NAMES|OF_UNITS|OF_COMMENTS)) {
+      if ((verbosity & VERBOSITY_3) == VERBOSITY_3) {
         symbol_t dstAddress = message->getDstAddress();
         if (dstAddress != SYN) {
           snprintf(str, sizeof(str), "%02x", dstAddress);
@@ -1515,26 +1535,22 @@ result_t MainLoop::executeFind(const vector<string>& args, const string& levels,
 
 result_t MainLoop::executeListen(const vector<string>& args, ClientSettings* settings, ostringstream* ostream) {
   size_t argPos = 1;
-  OutputFormat verbosity = 0;
+  OutputFormat verbosity = OF_NONE;
   bool listenWithUnknown = false;
   bool listenOnlyUnknown = false;
   while (args.size() > argPos && args[argPos][0] == '-') {
     if (args[argPos] == "-v") {
-      switch (verbosity) {
-      case 0:
-        verbosity = OF_NAMES;
-        break;
-      case OF_NAMES:
-        verbosity |= OF_UNITS;
-        break;
-      case OF_NAMES|OF_UNITS:
-        verbosity |= OF_COMMENTS;
-        break;
+      if ((verbosity & VERBOSITY_3) == VERBOSITY_0) {
+        verbosity |= VERBOSITY_1;
+      } else if ((verbosity & VERBOSITY_3) == VERBOSITY_1) {
+        verbosity |= VERBOSITY_2;
+      } else {
+        verbosity |= VERBOSITY_3;
       }
     } else if (args[argPos] == "-vv") {
-      verbosity |= OF_NAMES|OF_UNITS;
+      verbosity |= VERBOSITY_2;
     } else if (args[argPos] == "-vvv" || args[argPos] == "-V") {
-      verbosity |= OF_NAMES|OF_UNITS|OF_COMMENTS;
+      verbosity |= VERBOSITY_3;
     } else if (args[argPos] == "-n") {
       verbosity = (verbosity & ~OF_VALUENAME) | OF_NUMERIC;
     } else if (args[argPos] == "-N") {
@@ -1608,17 +1624,27 @@ result_t MainLoop::executeGrab(const vector<string>& args, ostringstream* ostrea
     return RESULT_OK;
   }
   if (args.size() >= 2 && args[1] == "result") {
-    if (args.size() == 2 || args[2] == "all") {
-      m_busHandler->formatGrabResult(args.size() == 2, false, ostream);
-      return RESULT_OK;
+    bool onlyUnknown = true;
+    bool decode = false;
+    bool invalid = false;
+    for (size_t i = args.size() - 1; i >= 2; i--) {
+      string arg = args[i];
+      if (arg == "all") {
+        onlyUnknown = false;
+      } else if (arg == "decode") {
+        decode = true;
+      } else {
+        invalid = true;
+        break;
+      }
     }
-    if (args.size() == 3 || args[2] == "decode") {
-      m_busHandler->formatGrabResult(true, true, ostream);
+    if (!invalid) {
+      m_busHandler->formatGrabResult(onlyUnknown, decode ? OF_DEFINITION : OF_NONE, ostream);
       return RESULT_OK;
     }
   }
   *ostream << "usage: grab [stop]\n"
-              "  or:  grab result [all|decode]\n"
+              "  or:  grab result [all|decode]*\n"
               " Start or stop grabbing, or report/decode unknown or all grabbed messages.";
   return RESULT_OK;
 }
@@ -1649,30 +1675,26 @@ result_t MainLoop::executeDefine(const vector<string>& args, ostringstream* ostr
   time(&now);
   string errorDescription;
   istringstream defstr("#\n" + args[argPos]);  // ensure first line is not used for determining col names
-  return m_messages->readFromStream(&defstr, "temporary", now, true, nullptr, &errorDescription, replace);
+  return m_messages->readFromStream(&defstr, "tcp", now, true, nullptr, &errorDescription, replace);
 }
 
 
 result_t MainLoop::executeDecode(const vector<string>& args, ostringstream* ostream) {
   size_t argPos = 1;
-  OutputFormat verbosity = 0;
+  OutputFormat verbosity = OF_NONE;
   while (args.size() > argPos && args[argPos][0] == '-') {
     if (args[argPos] == "-v") {
-      switch (verbosity) {
-        case 0:
-          verbosity = OF_NAMES;
-          break;
-        case OF_NAMES:
-          verbosity |= OF_UNITS;
-          break;
-        case OF_NAMES|OF_UNITS:
-          verbosity |= OF_COMMENTS;
-          break;
+      if ((verbosity & VERBOSITY_3) == VERBOSITY_0) {
+        verbosity |= VERBOSITY_1;
+      } else if ((verbosity & VERBOSITY_3) == VERBOSITY_1) {
+        verbosity |= VERBOSITY_2;
+      } else {
+        verbosity |= VERBOSITY_3;
       }
     } else if (args[argPos] == "-vv") {
-      verbosity |= OF_NAMES|OF_UNITS;
+      verbosity |= VERBOSITY_2;
     } else if (args[argPos] == "-vvv" || args[argPos] == "-V") {
-      verbosity |= OF_NAMES|OF_UNITS|OF_COMMENTS;
+      verbosity |= VERBOSITY_3;
     } else if (args[argPos] == "-n") {
       verbosity = (verbosity & ~OF_VALUENAME) | OF_NUMERIC;
     } else if (args[argPos] == "-N") {
@@ -1878,15 +1900,33 @@ result_t MainLoop::executeReload(const vector<string>& args, ostringstream* ostr
 }
 
 result_t MainLoop::executeInfo(const vector<string>& args, const string& user, ostringstream* ostream) {
-  if (args.size() == 0) {
-    *ostream << "usage: info\n"
-                " Report information about the daemon, the configuration, and seen devices.";
+  bool verbose = args.size() == 2 && args[1] == "verbose";
+  if (args.size() != 1 && !verbose) {
+    *ostream << "usage: info [verbose]\n"
+                " Report information about the daemon, configuration, seen participants, and the device.";
     return RESULT_OK;
   }
   *ostream << "version: " << PACKAGE_STRING "." REVISION "\n";
   if (!m_updateCheck.empty()) {
     *ostream << "update check: " << m_updateCheck << "\n";
   }
+  *ostream << "device: " << m_device->getName();
+  if (m_device->isEnhancedProto()) {
+    *ostream << ", enhanced";
+  }
+  if (m_device->isReadOnly()) {
+    *ostream << ", readonly";
+  }
+  if (!m_device->isValid()) {
+    *ostream << ", invalid";
+  }
+  if (verbose) {
+    string info = m_device->getEnhancedInfos();
+    if (!info.empty()) {
+      *ostream << ", " << info;
+    }
+  }
+  *ostream << "\n";
   if (!user.empty()) {
     *ostream << "user: " << user << "\n";
   }
@@ -1934,22 +1974,22 @@ result_t MainLoop::executeHelp(ostringstream* ostream) {
   *ostream << "usage:\n"
       " read|r    Read value(s):         read [-f] [-m SECONDS] [-s QQ] [-d ZZ] [-c CIRCUIT] [-p PRIO] [-v|-V] [-n|-N]"
       " [-i VALUE[;VALUE]*] NAME [FIELD[.N]]\n"
-      "           Read by new defintion: read [-f] [-m SECONDS] [-s QQ] [-d ZZ] [-v|-V] [-n|-N] (if enabled)"
-      " [-i VALUE[;VALUE]*] -def DEFINITION\n"
+      "           Read by new defintion: read [-f] [-m SECONDS] [-s QQ] [-d ZZ] [-v|-V] [-n|-N]"
+      " [-i VALUE[;VALUE]*] -def DEFINITION (if enabled)\n"
       "           Read hex message:      read [-f] [-m SECONDS] [-s QQ] [-c CIRCUIT] -h ZZPBSBNN[DD]*\n"
       " write|w   Write value(s):        write [-s QQ] [-d ZZ] -c CIRCUIT NAME [VALUE[;VALUE]*]\n"
       "           Write by new def.:     write [-s QQ] [-d ZZ] -def DEFINITION [VALUE[;VALUE]*] (if enabled)\n"
       "           Write hex message:     write [-s QQ] [-c CIRCUIT] -h ZZPBSBNN[DD]*\n"
       " auth|a    Authenticate user:     auth USER SECRET\n"
-      " hex       Send hex data:         hex [-s QQ] ZZPBSBNN[DD]* (if enabled)\n"
+      " hex       Send hex data:         hex [-s QQ] [-n] ZZPBSB[NN][DD]* (if enabled)\n"
       " find|f    Find message(s):       find [-v|-V] [-r] [-w] [-p] [-a] [-d] [-h] [-i ID] [-f] [-F COL[,COL]*] [-e]"
       " [-c CIRCUIT] [-l LEVEL] [NAME]\n"
       " listen|l  Listen for updates:    listen [-v|-V] [-n|-N] [-u|-U] [stop]\n"
       " direct    Enter direct mode\n"
       " state|s   Report bus state\n"
-      " info|i    Report information about the daemon, the configuration, and seen devices.\n"
+      " info|i    Report information about the daemon, configuration, seen participants, and the device.\n"
       " grab|g    Grab messages:         grab [stop]\n"
-      "           Report the messages:   grab result [all]\n"
+      "           Report the messages:   grab result [all|decode]\n"
       " define    Define new message:    define [-r] DEFINITION\n"
       " decode|d  Decode field(s):       decode [-v|-V] [-n|-N] DEFINITION DD[DD]*\n"
       " encode|e  Encode field(s):       encode DEFINITION VALUE[;VALUE]*\n"
@@ -1974,9 +2014,6 @@ bool parseBoolQuery(const string& value) {
 }
 
 result_t MainLoop::executeGet(const vector<string>& args, bool* connected, ostringstream* ostream) {
-  bool required = false, full = false, withWrite = false, raw = false;
-  bool withDefinition = false;
-  OutputFormat verbosity = OF_NAMES;
   time_t maxAge = -1;
   size_t argPos = 1;
   string uri = args[argPos++];
@@ -1991,6 +2028,10 @@ result_t MainLoop::executeGet(const vector<string>& args, bool* connected, ostri
       circuit = uri.substr(6, pos - 6);
       name = uri.substr(pos + 1);
     }
+    bool required = false, full = false, withWrite = false, raw = false;
+    bool withDefinition = false;
+    string newDefinition;
+    OutputFormat verbosity = OF_NAMES;
     time_t since = 0;
     size_t pollPriority = 0;
     bool exact = false;
@@ -2044,6 +2085,18 @@ result_t MainLoop::executeGet(const vector<string>& args, bool* connected, ostri
           raw = parseBoolQuery(value);
         } else if (qname == "def") {
           withDefinition = parseBoolQuery(value);
+        } else if (qname == "define") {
+          if (!m_newlyDefinedMessages || circuit.empty() || name.empty() || value.empty()) {
+            ret = RESULT_ERR_INVALID_ARG;
+            break;
+          }
+          size_t comma = value.find(',');
+          if (comma == string::npos || comma == 0
+          || value.find(circuit+","+name+",") != comma+1) { // ensure same circuit+name
+            ret = RESULT_ERR_INVALID_ARG;
+            break;
+          }
+          newDefinition = value;
         } else if (qname == "user") {
           user = value;
         } else if (qname == "secret") {
@@ -2063,9 +2116,14 @@ result_t MainLoop::executeGet(const vector<string>& args, bool* connected, ostri
     time_t now;
     time(&now);
     time_t maxLastUp = 0;
+    if (ret == RESULT_OK && !newDefinition.empty()) {
+      string errorDescription;
+      istringstream defstr("#\n" + newDefinition);  // ensure first line is not used for determining col names
+      ret = m_messages->readFromStream(&defstr, "http", now, true, nullptr, &errorDescription, true);
+    }
     if (ret == RESULT_OK) {
       bool first = true;
-      verbosity |= OF_JSON | (full ? OF_ALL_ATTRS : 0) | (withDefinition ? OF_DEFINTION : 0);
+      verbosity |= OF_JSON | (full ? OF_ALL_ATTRS : OF_NONE) | (withDefinition ? OF_DEFINITION : OF_NONE);
       deque<Message*> messages;
       m_messages->findAll(circuit, name, getUserLevels(user), exact, true, withWrite, true, true, true, 0, 0, false,
                           &messages);
@@ -2080,7 +2138,7 @@ result_t MainLoop::executeGet(const vector<string>& args, bool* connected, ostri
           m_messages->addPollMessage(false, message);
         }
         time_t lastup = message->getLastUpdateTime();
-        if (required && (lastup == 0 || (maxAge >=0 && lastup + maxAge > now))) {
+        if (required && (lastup == 0 || (maxAge >=0 && lastup + maxAge <= now))) {
           // read directly from bus
           if (message->isPassive()) {
             continue;  // not possible to actively read this message
@@ -2116,7 +2174,7 @@ result_t MainLoop::executeGet(const vector<string>& args, bool* connected, ostri
           Message* next = *(it+1);
           same = next->getCircuit() == lastCircuit && next->getName() == name;
         }
-        message->decodeJson(!first, same, raw, verbosity, ostream);
+        message->decodeJson(!first, same, true, raw, verbosity, ostream);
         lastName = name;
         first = false;
       }
@@ -2163,6 +2221,107 @@ result_t MainLoop::executeGet(const vector<string>& args, bool* connected, ostri
     *connected = false;
     return formatHttpResult(ret, type, ostream);
   }  // request for "/data..."
+
+  if (uri == "/datatypes") {
+    *ostream << "[";
+    OutputFormat verbosity = OF_NAMES|OF_JSON|OF_ALL_ATTRS;
+    DataTypeList::getInstance()->dump(verbosity, true, ostream);
+    *ostream << "\n]";
+    type = 6;
+    *connected = false;
+    return formatHttpResult(ret, type, ostream);
+  }
+
+  if (uri == "/raw") {
+    time_t since = 0, until = 0;
+    bool onlyUnknown = false;
+    if (args.size() > argPos) {
+      string query = args[argPos];
+      istringstream stream(query);
+      string token;
+      while (getline(stream, token, '&')) {
+        size_t pos = token.find('=');
+        string qname, value;
+        if (pos != string::npos) {
+          qname = token.substr(0, pos);
+          value = token.substr(pos + 1);
+        } else {
+          qname = token;
+        }
+        if (qname == "since") {
+          since = parseInt(value.c_str(), 10, 0, 0xffffffff, &ret);
+        } else if (qname == "unknown") {
+          onlyUnknown = parseBoolQuery(value);
+        }
+        if (ret != RESULT_OK) {
+          break;
+        }
+      }
+    }
+    if (ret == RESULT_OK) {
+      *ostream << "[";
+      if (since > 0) {
+        time_t now;
+        time(&now);
+        until = now-1;
+      }
+      m_busHandler->formatGrabResult(onlyUnknown, OF_JSON, ostream, false, since, until);
+      *ostream << "\n]";
+      type = 6;
+    }
+    *connected = false;
+    return formatHttpResult(ret, type, ostream);
+  }
+
+  if (uri == "/decode") {
+    string def;
+    string raw;
+    if (args.size() > argPos) {
+      string query = args[argPos];
+      istringstream stream(query);
+      string token;
+      while (getline(stream, token, '&')) {
+        size_t pos = token.find('=');
+        string qname, value;
+        if (pos != string::npos) {
+          qname = token.substr(0, pos);
+          value = token.substr(pos + 1);
+        } else {
+          qname = token;
+        }
+        if (qname == "def") {
+          def = value;
+        } else if (qname == "raw") {
+          raw = value;
+        }
+        if (ret != RESULT_OK) {
+          break;
+        }
+      }
+    }
+    if (ret == RESULT_OK) {
+      time_t now;
+      time(&now);
+      istringstream defstr("#\n" + def);  // ensure first line is not used for determining col names
+      string errorDescription;
+      DataFieldTemplates* templates = getTemplates("*");
+      LoadableDataFieldSet fields("", templates);
+      ret = fields.readFromStream(&defstr, "temporary", now, true, nullptr, &errorDescription);
+      if (ret == RESULT_OK) {
+        const SingleDataField* field = fields[0];
+        SlaveSymbolString slave;
+        slave.push_back(0);  // dummy length
+        ret = slave.parseHex(raw);
+        if (ret == RESULT_OK) {
+          slave.adjustHeader();
+          ret = field->read(slave, 0, false, nullptr, 0, OF_JSON|OF_SHORT, 0, ostream);
+        }
+      }
+      type = 6;
+    }
+    *connected = false;
+    return formatHttpResult(ret, type, ostream);
+  }
 
   if (uri.length() < 1 || uri[0] != '/' || uri.find("//") != string::npos || uri.find("..") != string::npos) {
     ret = RESULT_ERR_INVALID_ARG;

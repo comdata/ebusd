@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -105,15 +105,18 @@ int main() {
     {"r,message circuit,message name,message comment,,25,B509,0d2800,,,tempsensor,,field unit,field comment", "temp=-14.00 field unit [field comment];sensor=ok [Fühlerstatus]", "ff25b509030d2800", "0320ff00", "D"},
     {"r,message circuit,message name,message comment,,25,B509,0d2800,,,tempsensor,,field unit,field comment", "\n     \"temp\": {\"value\": -14.00},\n     \"sensor\": {\"value\": \"ok\"}", "ff25b509030d2800", "0320ff00", "j"},
     {"r,message circuit,message name,message comment,,25,B509,0d2800,,,tempsensor,,field unit,field comment", "\n     \"temp\": {\"value\": -14.00, \"unit\": \"field unit\", \"comment\": \"field comment\"},\n" "     \"sensor\": {\"value\": \"ok\", \"comment\": \"Fühlerstatus\"}", "ff25b509030d2800", "0320ff00", "J"},
+    {"r,message circuit,message name,\"message, comment\",,25,B509,0d2800,,,tempsensor,,field unit,\"field, comment\"", "\n     \"temp\": {\"value\": -14.00, \"unit\": \"field unit\", \"comment\": \"field, comment\"},\n" "     \"sensor\": {\"value\": \"ok\", \"comment\": \"Fühlerstatus\"}", "ff25b509030d2800", "0320ff00", "J"},
+    {"r,message circuit,message name,\"message\"\",\"\" comment\",,25,B509,0d2800,,,tempsensor,,field unit,\"field\"\",\"\" comment\"", "\n     \"temp\": {\"value\": -14.00, \"unit\": \"field unit\", \"comment\": \"field',' comment\"},\n" "     \"sensor\": {\"value\": \"ok\", \"comment\": \"Fühlerstatus\"}", "ff25b509030d2800", "0320ff00", "J"},
     {"r,message circuit,message name,message comment,,25,B509,0d2800,,,temp,,field unit,field comment,,,sensor", "temp=-14.00 field unit [field comment];sensor=ok [Fühlerstatus]", "ff25b509030d2800", "0320ff00", "D"},
+    {"r,message circuit,message name,message comment,,25,B509,0d2800,,,temp,,field unit,\"field\"\",\"\" comment\",,,sensor", "temp=-14.00 field unit [field\",\" comment];sensor=ok [Fühlerstatus]", "ff25b509030d2800", "0320ff00", "D"},
     {"r,message circuit,message name,message comment,,25,B509,0d2800,,,D2C,,°C,Temperatur,,,sensor", "\n     \"0\": {\"name\": \"\", \"value\": -14.00},\n     \"1\": {\"name\": \"sensor\", \"value\": \"ok\"}", "ff25b509030d2800", "0320ff00", "j"},
     {"r,cir,name,,,25,B509,0d2800,,,tempsensorc", "-14.00", "ff25b509030d2800", "0320ff55", ""},
     {"r,cir,name,,,25,B509,0d28,,m,sensorc,,,,,,temp", "-14.00", "ff25b509030d2855", "0220ff", ""},
-    {"u,cir,first,,,fe,0700,,x,,bda", "26.10.2014", "fffe07000426100614", "00", "p"},
+    {"u,cir,first,,,fe,0700,,x,,bda", "26.10.2014", "fffe07000426100714", "00", "p"},
     {"u,broadcast,hwStatus,,,fe,b505,27,,,UCH,,,,,,UCH,,,,,,UCH,,,", "0;19;0", "10feb505042700130097", "00", ""},
-    {"u,broadcast,datetime,Datum/Uhrzeit,,fe,0700,,outsidetemp,,temp2,,°C,Aussentemperatur,time,,btime,,,,date,,BDA,,,Datum", "outsidetemp=14.500 °C [Aussentemperatur];time=12:25:01 [Uhrzeit];date=01.05.2017 [Datum]", "10fe070009800e01251201050017", "", "D"},
-    {"u,broadcast,datetime,Datum Uhrzeit,,fe,0700,,,,temp2;btime;bdate", "temp2=14.500 °C [Temperatur];time=12:25:01 [Uhrzeit];date=01.05.2017 [Datum]", "10fe070009800e01251201050017", "", "D"},
-    {"w,cir,first,,,15,b509,0400,date,,bda", "26.10.2014", "ff15b50906040026100614", "00", ""},
+    {"u,broadcast,datetime,Datum/Uhrzeit,,fe,0700,,outsidetemp,,temp2,,°C,Aussentemperatur,time,,btime,,,,date,,BDA,,,Datum", "outsidetemp=14.500 °C [Aussentemperatur];time=12:25:01 [Uhrzeit];date=01.05.2017 [Datum]", "10fe070009800e01251201050117", "", "D"},
+    {"u,broadcast,datetime,Datum Uhrzeit,,fe,0700,,,,temp2;btime;bdate", "temp2=14.500 °C [Temperatur];time=12:25:01 [Uhrzeit];date=01.05.2017 [Datum]", "10fe070009800e01251201050117", "", "D"},
+    {"w,cir,first,,,15,b509,0400,date,,bda", "26.10.2014", "ff15b50906040026100714", "00", ""},
     {"w,cir,first,,,15,b509", "", "ff15b50900", "00", ""},
     {"*w,,,,,,b505,2d", "", "", "", ""},
     {"w,cir,offset,,,50,,,,,temp", "0.50", "ff50b505042d080000", "00", "kd"},
@@ -151,22 +154,22 @@ int main() {
     {"w,ehp,multi,,,,,01:8;02:2;03,longname,,STR:15", "ABCDEFGHIJKLMNO", "ff08b5090a0e014142434445464748;ff08b509040e02494a;ff08b509070e034b4c4d4e4f", "00;00;00", "dC" },
     {"w,ehp,multi,,,,,01:8;02:2;0304,longname,,STR:15", "ABCDEFGHIJKLMNO", "ff08b5090a0e014142434445464748;ff08b509040e02494a;ff08b509070e034b4c4d4e4f", "00;00;00", "cC" },
     {"r,ehp,scan,chained scan,,08,B509,24:9;25;26;27,,,IGN,,,,id4,,STR:28", "21074500100027790000000000N8", "ff08b5090124;ff08b5090125;ff08b5090126;ff08b5090127", "09003231303734353030;09313030303237373930;09303030303030303030;024E38", "dC" },
-    {"r,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7:1,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B71;B61", "ff08b509030d6900", "03138040", "d" },
-    {"r,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7:1,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B71;B60", "ff08b509030d6900", "0313ffbf", "d" },
-    {"r,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7:1,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B70;B61", "ff08b509030d6900", "03137fff", "d" },
-    {"r,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7:1,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B70;B60", "ff08b509030d6900", "03137fbf", "d" },
-    {"r,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7:1,0=B70;1=B71", "1.9;B61;B71", "ff08b509030d6a00", "0213ff", "d" },
-    {"r,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7:1,0=B70;1=B71", "1.9;B60;B71", "ff08b509030d6a00", "0213bf", "d" },
-    {"r,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7:1,0=B70;1=B71", "1.9;B61;B70", "ff08b509030d6a00", "02137f", "d" },
-    {"r,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7:1,0=B70;1=B71", "1.9;B60;B70", "ff08b509030d6a00", "02133f", "d" },
-    {"w,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7:1,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B71;B61", "ff08b509060e6900138040", "00", "di" },
-    {"w,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7:1,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B71;B60", "ff08b509060e6900138000", "00", "di" },
-    {"w,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7:1,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B70;B61", "ff08b509060e6900130040", "00", "di" },
-    {"w,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7:1,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B70;B60", "ff08b509060e6900130000", "00", "di" },
-    {"w,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7:1,0=B70;1=B71", "1.9;B61;B71", "ff08b509050e6a0013c0", "00", "di" },
-    {"w,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7:1,0=B70;1=B71", "1.9;B60;B71", "ff08b509050e6a001380", "00", "di" },
-    {"w,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7:1,0=B70;1=B71", "1.9;B61;B70", "ff08b509050e6a001340", "00", "di" },
-    {"w,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7:1,0=B70;1=B71", "1.9;B60;B70", "ff08b509050e6a001300", "00", "di" },
+    {"r,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B71;B61", "ff08b509030d6900", "03138040", "d" },
+    {"r,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B71;B60", "ff08b509030d6900", "0313ffbf", "d" },
+    {"r,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B70;B61", "ff08b509030d6900", "03137fff", "d" },
+    {"r,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B70;B60", "ff08b509030d6900", "03137fbf", "d" },
+    {"r,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7,0=B70;1=B71", "1.9;B61;B71", "ff08b509030d6a00", "0213ff", "d" },
+    {"r,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7,0=B70;1=B71", "1.9;B60;B71", "ff08b509030d6a00", "0213bf", "d" },
+    {"r,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7,0=B70;1=B71", "1.9;B61;B70", "ff08b509030d6a00", "02137f", "d" },
+    {"r,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7,0=B70;1=B71", "1.9;B60;B70", "ff08b509030d6a00", "02133f", "d" },
+    {"w,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B71;B61", "ff08b509060e6900138040", "00", "di" },
+    {"w,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B71;B60", "ff08b509060e6900138000", "00", "di" },
+    {"w,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B70;B61", "ff08b509060e6900130040", "00", "di" },
+    {"w,,x,,,,,6900,,,UCH,10,bar,,Bit7,,BI7,0=B70;1=B71,,,Bit6,,BI6:1,0=B60;1=B61", "1.9;B70;B60", "ff08b509060e6900130000", "00", "di" },
+    {"w,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7,0=B70;1=B71", "1.9;B61;B71", "ff08b509050e6a0013c0", "00", "di" },
+    {"w,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7,0=B70;1=B71", "1.9;B60;B71", "ff08b509050e6a001380", "00", "di" },
+    {"w,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7,0=B70;1=B71", "1.9;B61;B70", "ff08b509050e6a001340", "00", "di" },
+    {"w,,x,,,,,6a00,,,UCH,10,bar,,Bit6,,BI6:1,0=B60;1=B61,,,Bit7,,BI7,0=B70;1=B71", "1.9;B60;B70", "ff08b509050e6a001300", "00", "di" },
     {"w,,x,,,,,,,,IGN:1,,,,b0,,BI0:1,,,,b1,,BI1:1,,,,b2,,BI2:1,,,,,,IGN:1,,,,c0,,BI0:1,,,,c1,,BI1:1,,,,c2,,BI2:1", "1;1;1;0;0;0", "ff08b509050e00070000", "00", "di" },
     {"w,,x,,,,,,,,IGN:1,,,,b0,,BI0:1,,,,b1,,BI1:1,,,,b2,,BI2:1,,,,,,IGN:1,,,,c0,,BI0:1,,,,c1,,BI1:1,,,,c2,,BI2:1", "1;0;0;0;0;1", "ff08b509050e00010004", "00", "di" },
     {"w,,x,,,,,,,,IGN:1,,,,b0,,BI0:1,,,,b1,,BI1:1,,,,b2,,BI2:1,,,,,,IGN:1,,,,c0,,BI0:1,,,,c1,,BI1:1,,,,c2,,BI2:1", "0;0;1;0;1;1", "ff08b509050e00040006", "00", "di" },
@@ -180,8 +183,6 @@ int main() {
     {"*r,cir*cuit#level,na*me,com*ment,ff,75,b509,0d", "", "", "", ""},
     {"r,CIRCUIT,NAME,COMMENT,,,,0100,field,,UCH", "r,cirCIRCUITcuit,naNAMEme,comCOMMENTment,ff,75,b509,0d0100,field,s,UCH,,,: field=42", "ff75b509030d0100", "012a", "DN"},
     {"r,CIRCUIT,NAME,COMMENT,,,,0100,field,,UCH",
-        // "\"naNAMEme\": {r,cirCIRCUITcuit,naNAMEme,comCOMMENTment,ff,75,b509,0d0100,field,s,UCH,,,: field=42"
-      "\n"
       "   \"naNAMEme\": {\n"
       "    \"name\": \"naNAMEme\",\n"
       "    \"passive\": false,\n"
@@ -404,7 +405,7 @@ int main() {
       ostringstream output;
       if (withMessageDump) {
         if (decodeJson) {
-          message->decodeJson(false, false, false, OF_JSON|OF_DEFINTION, &output);
+          message->decodeJson(false, false, true, false, OF_JSON|OF_DEFINITION, &output);
           string str = output.str();
           size_t start = str.find("\"lastup\": ");
           if (start != string::npos) {
@@ -417,12 +418,12 @@ int main() {
           output.str("");
           output << str;
         } else {
-          message->dump(nullptr, true, &output);
+          message->dump(nullptr, true, OF_NONE, &output);
         }
         output << ": ";
       }
       result = message->decodeLastData(false, nullptr, -1,
-          (decodeVerbose?OF_NAMES|OF_UNITS|OF_COMMENTS:0)|(decodeJson?OF_NAMES|OF_JSON:0), &output);
+          (decodeVerbose?OF_NAMES|OF_UNITS|OF_COMMENTS:OF_NONE)|(decodeJson?OF_NAMES|OF_JSON:OF_NONE), &output);
       if (result != RESULT_OK) {
         cout << "  \"" << check[2] << "\" / \"" << check[3] << "\": decode error " << (message->isWrite() ? "write: " : "read: ")
             << getResultCode(result) << endl;

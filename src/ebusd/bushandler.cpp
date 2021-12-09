@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -130,7 +130,7 @@ bool ScanRequest::notify(result_t result, const SlaveSymbolString& slave) {
     }
     if (result == RESULT_OK) {
       ostringstream output;
-      result = m_message->decodeLastData(true, nullptr, -1, 0, &output);  // decode data
+      result = m_message->decodeLastData(true, nullptr, -1, OF_NONE, &output);  // decode data
       string str = output.str();
       m_busHandler->setScanResult(dstAddress, m_notifyIndex+m_index, str);
     }
@@ -183,7 +183,7 @@ bool ScanRequest::notify(result_t result, const SlaveSymbolString& slave) {
 
 bool ActiveBusRequest::notify(result_t result, const SlaveSymbolString& slave) {
   if (result == RESULT_OK) {
-    string str = m_master.getStr();
+    string str = slave.getStr();
     logDebug(lf_bus, "read res: %s", str.c_str());
   }
   m_result = result;
@@ -216,7 +216,7 @@ bool decodeType(const DataType* type, const SymbolString& input, size_t length,
   string in = input.getStr(input.getDataOffset());
   for (size_t offset = 0; offset <= offsets; offset++) {
     ostringstream out;
-    result_t result = type->readSymbols(offset, length, input, 0, &out);
+    result_t result = type->readSymbols(offset, length, input, OF_NONE, &out);
     if (result != RESULT_OK) {
       continue;
     }
@@ -231,7 +231,7 @@ bool decodeType(const DataType* type, const SymbolString& input, size_t length,
       first = false;
       *output << endl << " ";
       ostringstream::pos_type cnt = output->tellp();
-      type->dump(false, length, false, output);
+      type->dump(OF_NONE, length, false, output);
       cnt = output->tellp() - cnt;
       while (cnt < 5) {
         *output << " ";
@@ -253,65 +253,87 @@ bool decodeType(const DataType* type, const SymbolString& input, size_t length,
   return !first;
 }
 
-bool GrabbedMessage::dump(bool unknown, MessageMap* messages, bool first, bool decode, ostringstream* output,
-    bool isDirectMode) const {
+bool GrabbedMessage::dump(bool unknown, MessageMap* messages, bool first, OutputFormat outputFormat,
+    ostringstream* output, bool isDirectMode) const {
   Message* message = messages->find(m_lastMaster);
   if (unknown && message) {
     return false;
   }
   if (!first) {
-    *output << endl;
+    if (outputFormat & OF_JSON) {
+      *output << ",";
+    } else {
+      *output << endl;
+    }
   }
   symbol_t dstAddress = m_lastMaster[1];
-  *output << m_lastMaster.getStr();
-  if (dstAddress != BROADCAST && !isMaster(dstAddress)) {
-    *output << (isDirectMode ? " " : " / ") << m_lastSlave.getStr();
-  }
-  if (!isDirectMode) {
-    *output << " = " << m_count;
+  if (outputFormat & OF_JSON) {
+    *output << "\n{";
+    if (m_lastMaster.dumpJson(false, output)) {
+      *output << ", ";
+      if (dstAddress != BROADCAST && !isMaster(dstAddress) && m_lastSlave.dumpJson(false, output)) {
+        *output << ", ";
+      }
+    }
+    *output << "\"count\": " << static_cast<unsigned>(m_count);
+    *output << ", \"lastup\": " << setw(0) << dec << m_lastTime;
     if (message) {
-      *output << ": " << message->getCircuit() << " " << message->getName();
+      *output << ", \"circuit\": \"" << message->getCircuit() << "\""
+              << ", \"name\": \"" << message->getName() << "\"";
+    }
+    *output << "}";
+  } else {
+    *output << m_lastMaster.getStr();
+    if (dstAddress != BROADCAST && !isMaster(dstAddress)) {
+      *output << (isDirectMode ? " " : " / ") << m_lastSlave.getStr();
+    }
+    if (!isDirectMode) {
+      *output << " = " << m_count;
+      if (message) {
+        *output << ": " << message->getCircuit() << " " << message->getName();
+      }
     }
   }
-  if (decode) {
-    DataTypeList *types = DataTypeList::getInstance();
-    if (!types) {
-      return true;
+  if (!(outputFormat & OF_DEFINITION) || (outputFormat & OF_JSON)) {
+    return true;
+  }
+  DataTypeList *types = DataTypeList::getInstance();
+  if (!types) {
+    return true;
+  }
+  bool master = isMaster(dstAddress) || dstAddress == BROADCAST || m_lastSlave.getDataSize() <= 0;
+  size_t remain = master ? m_lastMaster.getDataSize() : m_lastSlave.getDataSize();
+  if (remain == 0) {
+    return true;
+  }
+  for (const auto& it : *types) {
+    const DataType* baseType = it.second;
+    if ((baseType->getBitCount() % 8) != 0 || baseType->isIgnored() || baseType->hasFlag(DUP)) {  // skip bit and ignored types
+      continue;
     }
-    bool master = isMaster(dstAddress) || dstAddress == BROADCAST || m_lastSlave.getDataSize() <= 0;
-    size_t remain = master ? m_lastMaster.getDataSize() : m_lastSlave.getDataSize();
-    if (remain == 0) {
-      return true;
+    size_t maxLength = baseType->getBitCount()/8;
+    bool firstOnly = maxLength >= 8;
+    if (maxLength > remain) {
+      maxLength = remain;
     }
-    for (const auto& it : *types) {
-      const DataType* baseType = it.second;
-      if ((baseType->getBitCount() % 8) != 0 || baseType->isIgnored()) {  // skip bit and ignored types
-        continue;
-      }
-      size_t maxLength = baseType->getBitCount()/8;
-      bool firstOnly = maxLength >= 8;
-      if (maxLength > remain) {
-        maxLength = remain;
-      }
-      if (baseType->isAdjustableLength()) {
-        for (size_t length = maxLength; length >= 1; length--) {
-          const DataType* type = types->get(baseType->getId(), length);
-          bool decoded;
-          if (master) {
-            decoded = decodeType(type, m_lastMaster, length, remain-length, firstOnly, output);
-          } else {
-            decoded = decodeType(type, m_lastSlave, length, remain-length, firstOnly, output);
-          }
-          if (decoded && firstOnly) {
-            break;  // only a single offset with maximum length when adjustable maximum size is at least 8 bytes
-          }
-        }
-      } else if (maxLength > 0) {
+    if (baseType->isAdjustableLength()) {
+      for (size_t length = maxLength; length >= 1; length--) {
+        const DataType* type = types->get(baseType->getId(), length);
+        bool decoded;
         if (master) {
-          decodeType(baseType, m_lastMaster, maxLength, remain-maxLength, false, output);
+          decoded = decodeType(type, m_lastMaster, length, remain-length, firstOnly, output);
         } else {
-          decodeType(baseType, m_lastSlave, maxLength, remain-maxLength, false, output);
+          decoded = decodeType(type, m_lastSlave, length, remain-length, firstOnly, output);
         }
+        if (decoded && firstOnly) {
+          break;  // only a single offset with maximum length when adjustable maximum size is at least 8 bytes
+        }
+      }
+    } else if (maxLength > 0) {
+      if (master) {
+        decodeType(baseType, m_lastMaster, maxLength, remain-maxLength, false, output);
+      } else {
+        decodeType(baseType, m_lastSlave, maxLength, remain-maxLength, false, output);
       }
     }
   }
@@ -425,6 +447,14 @@ void BusHandler::run() {
   } while (isRunning());
 }
 
+#ifndef FALLTHROUGH
+#if defined(__GNUC__) && __GNUC__ >= 7
+#define FALLTHROUGH [[fallthrough]];
+#else
+#define FALLTHROUGH
+#endif
+#endif
+
 result_t BusHandler::handleSymbol() {
   unsigned int timeout = SYN_TIMEOUT;
   symbol_t sendSymbol = ESC;
@@ -438,6 +468,7 @@ result_t BusHandler::handleSymbol() {
 
   case bs_skip:
     timeout = SYN_TIMEOUT;
+    FALLTHROUGH
   case bs_ready:
     if (m_currentRequest != nullptr) {
       setState(bs_ready, RESULT_ERR_TIMEOUT);  // just to be sure an old BusRequest is cleaned up
@@ -550,7 +581,7 @@ result_t BusHandler::handleSymbol() {
 
   // send symbol if necessary
   result_t result;
-  struct timespec sentTime = {}, recvTime = {};
+  struct timespec sentTime, recvTime;
   if (sending) {
     if (m_state != bs_sendSyn && (sendSymbol == ESC || sendSymbol == SYN)) {
       if (m_escape) {
@@ -1156,7 +1187,7 @@ void BusHandler::messageCompleted() {
           result = message->storeLastData(0, idData);
           if (result == RESULT_OK) {
             ostringstream output;
-            result = message->decodeLastData(true, nullptr, -1, 0, &output);
+            result = message->decodeLastData(true, nullptr, -1, OF_NONE, &output);
             if (result == RESULT_OK) {
               string str = output.str();
               setScanResult(slaveAddress, 0, str);
@@ -1176,7 +1207,7 @@ void BusHandler::messageCompleted() {
         result_t result = message->storeLastData(m_command, m_response);
         if (result == RESULT_OK) {
           ostringstream output;
-          result = message->decodeLastData(true, nullptr, -1, 0, &output);
+          result = message->decodeLastData(true, nullptr, -1, OF_NONE, &output);
           if (result == RESULT_OK) {
             string str = output.str();
             setScanResult(dstAddress, 0, str);
@@ -1216,7 +1247,7 @@ void BusHandler::messageCompleted() {
     result_t result = message->storeLastData(m_command, m_response);
     ostringstream output;
     if (result == RESULT_OK) {
-      result = message->decodeLastData(false, nullptr, -1, 0, &output);
+      result = message->decodeLastData(false, nullptr, -1, OF_NONE, &output);
     }
     if (result < RESULT_OK) {
       logError(lf_update, "unable to parse %s %s %s from %s / %s: %s", mode, circuit.c_str(), name.c_str(),
@@ -1380,7 +1411,7 @@ void BusHandler::formatScanResult(ostringstream* output) const {
             *output << endl;
           }
           *output << hex << setw(2) << setfill('0') << static_cast<unsigned>(slave);
-          message->decodeLastData(true, nullptr, -1, 0, output);
+          message->decodeLastData(true, nullptr, -1, OF_NONE, output);
         }
       }
     }
@@ -1601,10 +1632,10 @@ bool BusHandler::enableGrab(bool enable) {
   return true;
 }
 
-void BusHandler::formatGrabResult(bool unknown, bool decode, ostringstream* output, bool isDirectMode,
+void BusHandler::formatGrabResult(bool unknown, OutputFormat outputFormat, ostringstream* output, bool isDirectMode,
     time_t since, time_t until) const {
   if (!m_grabMessages) {
-    if (!isDirectMode) {
+    if (!isDirectMode && !(outputFormat & OF_JSON)) {
       *output << "grab disabled";
     }
     return;
@@ -1615,7 +1646,7 @@ void BusHandler::formatGrabResult(bool unknown, bool decode, ostringstream* outp
     || (until > 0 && it.second.getLastTime() >= until)) {
       continue;
     }
-    if (it.second.dump(unknown, m_messages, first, decode, output, isDirectMode)) {
+    if (it.second.dump(unknown, m_messages, first, outputFormat, output, isDirectMode)) {
       first = false;
     }
   }

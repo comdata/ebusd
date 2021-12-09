@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -67,13 +67,26 @@ string AttributedItem::pluck(const string& key, map<string, string>* row) {
 }
 
 void AttributedItem::dumpString(bool prependFieldSeparator, const string& str, ostream* output) {
+  // not to be used for JSON format
   if (prependFieldSeparator) {
     *output << FIELD_SEPARATOR;
   }
-  if (str.find_first_of(FIELD_SEPARATOR) == string::npos) {
+  string::size_type pos = str.find_first_of(TEXT_SEPARATOR);
+  if (str.find_first_of(FIELD_SEPARATOR) == string::npos
+  && (pos == string::npos || (pos > 0 && pos < str.length() - 1))) {
     *output << str;
-  } else {
+  } else if (pos == string::npos) {
     *output << TEXT_SEPARATOR << str << TEXT_SEPARATOR;
+  } else {
+    *output << TEXT_SEPARATOR;
+    string::size_type last = 0;
+    while (pos != string::npos) {
+      *output << str.substr(last, pos - last);
+      *output << TEXT_SEPARATOR << TEXT_SEPARATOR;
+      last = pos+1;
+      pos = str.find_first_of(TEXT_SEPARATOR, last);
+    }
+    *output << str.substr(last) << TEXT_SEPARATOR;
   }
 }
 
@@ -90,7 +103,7 @@ void AttributedItem::appendJson(bool prependFieldSeparator, const string& name, 
     }
   }
   if (prependFieldSeparator) {
-    *output << FIELD_SEPARATOR;
+    *output << ",";
   }
   *output << " \"" << name << "\": ";
   if (plain) {
@@ -117,9 +130,9 @@ void AttributedItem::mergeAttributes(map<string, string>* attributes) const {
   }
 }
 
-void AttributedItem::dumpAttribute(bool prependFieldSeparator, bool asJson, const string& name, ostream* output)
+void AttributedItem::dumpAttribute(bool prependFieldSeparator, OutputFormat outputFormat, const string& name, ostream* output)
     const {
-  if (asJson) {
+  if (outputFormat & OF_JSON) {
     appendJson(prependFieldSeparator, name, getAttribute(name), false, output);
   } else {
     dumpString(prependFieldSeparator, getAttribute(name), output);
@@ -150,7 +163,7 @@ bool AttributedItem::appendAttributes(OutputFormat outputFormat, ostream* output
     ret = appendAttribute(outputFormat, "comment", true, "[", "]", output) || ret;
   }
   if (outputFormat & OF_ALL_ATTRS) {
-    for (const auto entry : m_attributes) {
+    for (const auto& entry : m_attributes) {
       ret = true;
       if (!entry.second.empty() && entry.first != "unit" && entry.first != "comment") {
         const string& key = entry.first;
@@ -159,7 +172,7 @@ bool AttributedItem::appendAttributes(OutputFormat outputFormat, ostream* output
             result_t result = RESULT_EMPTY;
             size_t addr = parseInt(entry.second.c_str(), 16, 0, 255, &result);
             if (result == RESULT_OK) {
-              *output << FIELD_SEPARATOR << " \"" << key << "\": " << addr;
+              *output << ", \"" << key << "\": " << addr;
               continue;
             }
           }
@@ -457,44 +470,43 @@ result_t SingleDataField::create(const string& name, const map<string, string>& 
   return RESULT_OK;
 }
 
-void SingleDataField::dumpPrefix(bool prependFieldSeparator, bool asJson, ostream* output) const {
+void SingleDataField::dumpPrefix(bool prependFieldSeparator, OutputFormat outputFormat, ostream* output) const {
   *output << setw(0) << dec;  // initialize formatting
-  if (asJson) {
+  if (outputFormat & OF_JSON) {
     if (prependFieldSeparator) {
-      *output << FIELD_SEPARATOR;
+      *output << ",";
     }
     *output << "\n     {";
     appendJson(false, "name", m_name, true, output);
   } else {
     dumpString(prependFieldSeparator, m_name, output);
   }
-  *output << FIELD_SEPARATOR;
-  if (asJson) {
-    *output << " \"slave\": " << (m_partType == pt_slaveData ? "true" : "false") << ", ";
+  if (outputFormat & OF_JSON) {
+    *output << ", \"slave\": " << (m_partType == pt_slaveData ? "true" : "false") << ", ";
   } else {
+    *output << FIELD_SEPARATOR;
     if (m_partType == pt_masterData) {
       *output << "m";
     } else if (m_partType == pt_slaveData) {
       *output << "s";
     }
-  }
-  if (!asJson) {
     *output << FIELD_SEPARATOR;
   }
-  m_dataType->dump(asJson, m_length, true, output);
+  m_dataType->dump(outputFormat, m_length, true, output);
 }
 
-void SingleDataField::dumpSuffix(bool asJson, ostream* output) const {
-  dumpAttribute(true, asJson, "unit", output);
-  dumpAttribute(true, asJson, "comment", output);
-  if (asJson) {
+void SingleDataField::dumpSuffix(OutputFormat outputFormat, ostream* output) const {
+  dumpAttribute(true, outputFormat, "unit", output);
+  dumpAttribute(true, outputFormat, "comment", output);
+  if (outputFormat & OF_JSON) {
+    appendAttributes(outputFormat & ~(OF_UNITS|OF_COMMENTS), output);
     *output << "}";
   }
 }
 
-void SingleDataField::dump(bool prependFieldSeparator, bool asJson, ostream* output) const {
-  dumpPrefix(prependFieldSeparator, asJson, output);
-  dumpSuffix(asJson, output);
+void SingleDataField::dump(bool prependFieldSeparator, OutputFormat outputFormat, ostream* output) const {
+  dumpPrefix(prependFieldSeparator, outputFormat, output);
+  dumpSuffix(outputFormat, output);
 }
 
 result_t SingleDataField::read(const SymbolString& data, size_t offset,
@@ -545,7 +557,7 @@ result_t SingleDataField::read(const SymbolString& data, size_t offset,
         *output << "\"" << static_cast<signed int>(outputIndex < 0 ? 0 : outputIndex) << "\":";
       }
       if (!shortFormat) {
-        *output << " {\"name\": \"" << m_name << "\"" << ", \"value\": ";
+        *output << " {\"name\": \"" << m_name << "\", \"value\": ";
       }
     } else {
       if (fieldIndex < 0) {
@@ -710,19 +722,19 @@ result_t ValueListDataField::derive(const string& name, PartType partType, int d
   return RESULT_OK;
 }
 
-void ValueListDataField::dump(bool prependFieldSeparator, bool asJson, ostream* output) const {
-  dumpPrefix(prependFieldSeparator, asJson, output);
+void ValueListDataField::dump(bool prependFieldSeparator, OutputFormat outputFormat, ostream* output) const {
+  dumpPrefix(prependFieldSeparator, outputFormat, output);
   // no divisor appended since it is not allowed for ValueListDataField
   bool first = true;
-  if (asJson) {
+  if (outputFormat & OF_JSON) {
     *output << ", \"values\": {";
-    for (const auto it : m_values) {
+    for (const auto& it : m_values) {
       appendJson(!first, formatInt(it.first), it.second, true, output);  // TODO optimize?
       first = false;
     }
     *output << " }";
   } else {
-    for (const auto it : m_values) {
+    for (const auto& it : m_values) {
       if (first) {
         first = false;
       } else {
@@ -731,7 +743,7 @@ void ValueListDataField::dump(bool prependFieldSeparator, bool asJson, ostream* 
       *output << it.first << "=" << it.second;
     }
   }
-  dumpSuffix(asJson, output);
+  dumpSuffix(outputFormat, output);
 }
 
 result_t ValueListDataField::readSymbols(const SymbolString& input, size_t offset,
@@ -811,7 +823,7 @@ result_t ConstantDataField::derive(const string& name, PartType partType, int di
     return RESULT_ERR_INVALID_PART;  // cannot create a template from a concrete instance
   }
   string useName = name.empty() ? m_name : name;
-  for (const auto entry : m_attributes) {  // merge with this attributes
+  for (const auto& entry : m_attributes) {  // merge with this attributes
     if ((*attributes)[entry.first].empty()) {
       (*attributes)[entry.first] = entry.second;
     }
@@ -826,22 +838,22 @@ result_t ConstantDataField::derive(const string& name, PartType partType, int di
   return RESULT_OK;
 }
 
-void ConstantDataField::dump(bool prependFieldSeparator, bool asJson, ostream* output) const {
-  dumpPrefix(prependFieldSeparator, asJson, output);
+void ConstantDataField::dump(bool prependFieldSeparator, OutputFormat outputFormat, ostream* output) const {
+  dumpPrefix(prependFieldSeparator, outputFormat, output);
   // no divisor appended since it is not allowed for ConstantDataField
-  if (asJson) {
+  if (outputFormat & OF_JSON) {
     appendJson(false, "value", m_value, true, output);
-    *output << ", \"verify\":" << (m_verify ? "true" : "false");
+    *output << ", \"verify\": " << (m_verify ? "true" : "false");
   } else {
     *output << (m_verify?"==":"=") << m_value;
   }
-  dumpSuffix(asJson, output);
+  dumpSuffix(outputFormat, output);
 }
 
 result_t ConstantDataField::readSymbols(const SymbolString& input, size_t offset,
     OutputFormat outputFormat, ostream* output) const {
   ostringstream coutput;
-  result_t result = SingleDataField::readSymbols(input, offset, 0, &coutput);
+  result_t result = SingleDataField::readSymbols(input, offset, outputFormat, &coutput);
   if (result != RESULT_OK) {
     return result;
   }
@@ -985,6 +997,29 @@ string DataFieldSet::getName(ssize_t fieldIndex) const {
   return ostream.str();
 }
 
+const SingleDataField* DataFieldSet::getField(ssize_t fieldIndex) const {
+  if (fieldIndex < (ssize_t)m_ignoredCount) {
+    return nullptr;
+  }
+  if ((size_t)fieldIndex + m_ignoredCount >= m_fields.size()) {
+    return nullptr;
+  }
+  if (m_ignoredCount == 0) {
+    return m_fields[fieldIndex];
+  }
+  ssize_t remain = fieldIndex;
+  for (const auto field : m_fields) {
+    if (field->isIgnored()) {
+      continue;
+    }
+    remain--;
+    if (remain == 0) {
+      return field;
+    }
+  }
+  return nullptr;
+}
+
 result_t DataFieldSet::derive(const string& name, PartType partType, int divisor,
     const map<unsigned int, string>& values, map<string, string>* attributes,
     vector<const SingleDataField*>* fields) const {
@@ -1012,9 +1047,9 @@ bool DataFieldSet::hasField(const char* fieldName, bool numeric) const {
   return false;
 }
 
-void DataFieldSet::dump(bool prependFieldSeparator, bool asJson, ostream* output) const {
+void DataFieldSet::dump(bool prependFieldSeparator, OutputFormat outputFormat, ostream* output) const {
   for (const auto field : m_fields) {
-    field->dump(prependFieldSeparator, asJson, output);
+    field->dump(prependFieldSeparator, outputFormat, output);
     prependFieldSeparator = true;
   }
 }
@@ -1269,7 +1304,7 @@ result_t LoadableDataFieldSet::addFromFile(const string& filename, unsigned int 
 
 DataFieldTemplates::DataFieldTemplates(const DataFieldTemplates& other)
 : MappedFileReader::MappedFileReader(false) {
-  for (const auto it : other.m_fieldsByName) {
+  for (const auto& it : other.m_fieldsByName) {
     m_fieldsByName[it.first] = it.second->clone();
   }
 }

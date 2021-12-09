@@ -78,21 +78,33 @@ else
   fi
 fi
 
+if [ -n "$RUNTEST" ]; then
+  echo
+  echo "*************"
+  echo " test"
+  echo "*************"
+  echo
+  testdie() {
+    echo "test failed"
+    exit 1
+  }
+  ($RELEASE/usr/bin/ebusd -f -c src/lib/ebus/test -d /dev/null --checkconfig -i 10fe0900040000803e/ | egrep "received update-read broadcast test QQ=10: 0\.25$") || testdie
+  if [ "$RUNTEST" == "full" ]; then
+    (cd src/lib/ebus/test && make >/dev/null && ./test_filereader && ./test_data && ./test_message && ./test_symbol) || testdie
+  fi
+fi
+
 echo
 echo "*************"
 echo " pack"
 echo "*************"
 echo
 mkdir -p $RELEASE/DEBIAN $RELEASE/etc/default $RELEASE/etc/logrotate.d || exit 1
-rm $RELEASE/usr/bin/ebusfeed
-if [ -d /run/systemd/system ]; then
-  mkdir -p $RELEASE/lib/systemd/system || exit 1
-  cp contrib/debian/systemd/ebusd.service $RELEASE/lib/systemd/system/ebusd.service || exit 1
-else
-  mkdir -p $RELEASE/etc/init.d || exit 1
-  cp contrib/debian/init.d/ebusd $RELEASE/etc/init.d/ebusd || exit 1
-fi
-  cp contrib/debian/default/ebusd $RELEASE/etc/default/ebusd || exit 1
+mkdir -p $RELEASE/lib/systemd/system || exit 1
+cp contrib/debian/systemd/ebusd.service $RELEASE/lib/systemd/system/ebusd.service || exit 1
+mkdir -p $RELEASE/etc/init.d || exit 1
+cp contrib/debian/init.d/ebusd $RELEASE/etc/init.d/ebusd || exit 1
+cp contrib/debian/default/ebusd $RELEASE/etc/default/ebusd || exit 1
 cp contrib/etc/logrotate.d/ebusd $RELEASE/etc/logrotate.d/ || exit 1
 cp ChangeLog.md $RELEASE/DEBIAN/changelog || exit 1
 cat <<EOF > $RELEASE/DEBIAN/control
@@ -104,40 +116,35 @@ Architecture: $ARCH
 Maintainer: John Baier <ebusd@ebusd.eu>
 Homepage: https://github.com/john30/ebusd
 Bugs: https://github.com/john30/ebusd/issues
-Depends: logrotate, libstdc++6 (>= 4.8.1), libc6, libgcc1$extralibs
+Depends: libstdc++6 (>= 4.8.1), libc6, libgcc1$extralibs
+Recommends: logrotate
 Description: eBUS daemon.
  ebusd is a daemon for handling communication with eBUS devices connected to a
  2-wire bus system.
 EOF
 cat <<EOF > $RELEASE/DEBIAN/dirs
-/etc/ebusd
 /etc/default
+/etc/init.d
 /etc/logrotate.d
+/lib/systemd/system
 /usr/bin
 EOF
+cat <<EOF > $RELEASE/DEBIAN/postinst
+#!/bin/sh
 if [ -d /run/systemd/system ]; then
-  echo /lib/systemd/system >> $RELEASE/DEBIAN/dirs
-  cat <<EOF > $RELEASE/DEBIAN/postinst
-#!/bin/sh
-echo "Instructions:"
-echo "1. Edit /etc/default/ebusd if necessary"
-echo "   (especially if your device is not /dev/ttyUSB0)"
-echo "2. Start the daemon with 'systemctl start ebusd'"
-echo "3. Check the log file /var/log/ebusd.log"
-echo "4. Make the daemon autostart with 'systemctl enable ebusd'"
-EOF
+  start='systemctl start ebusd'
+  autostart='systemctl enable ebusd'
 else
-  echo /etc/init.d >> $RELEASE/DEBIAN/dirs
-  cat <<EOF > $RELEASE/DEBIAN/postinst
-#!/bin/sh
+  start='service ebusd start'
+  autostart='update-rc.d ebusd defaults'
+fi
 echo "Instructions:"
 echo "1. Edit /etc/default/ebusd if necessary"
 echo "   (especially if your device is not /dev/ttyUSB0)"
-echo "2. Start the daemon with 'service ebusd start'"
+echo "2. Start the daemon with '\$start'"
 echo "3. Check the log file /var/log/ebusd.log"
-echo "4. Make the daemon autostart with 'update-rc.d ebusd enable'"
+echo "4. Make the daemon autostart with '\$autostart'"
 EOF
-fi
 chmod 755 $RELEASE/DEBIAN/postinst
 
 dpkg -b $RELEASE || exit 1

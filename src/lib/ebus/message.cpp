@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -119,6 +119,7 @@ Message::Message(const string& circuit, const string& level, const string& name,
     setScanMessage();
     m_pollPriority = 0;
   }
+  time(&m_createTime);
 }
 
 Message::Message(const string& circuit, const string& level, const string& name,
@@ -132,6 +133,7 @@ Message::Message(const string& circuit, const string& level, const string& name,
       m_pollPriority(0),
       m_usedByCondition(false), m_isScanMessage(true), m_condition(nullptr),
       m_lastUpdateTime(0), m_lastChangeTime(0), m_pollOrder(0), m_lastPollTime(0) {
+  time(&m_createTime);
 }
 
 
@@ -845,7 +847,8 @@ void Message::dumpHeader(const vector<string>* fieldNames, ostream* output) {
   }
 }
 
-void Message::dump(const vector<string>* fieldNames, bool withConditions, ostream* output) const {
+void Message::dump(const vector<string>* fieldNames, bool withConditions, OutputFormat outputFormat, ostream* output) const {
+  // not to be used together with OF_JSON
   bool first = true;
   if (fieldNames == nullptr) {
     for (const auto& fieldName : knownFieldNamesFull) {
@@ -857,7 +860,7 @@ void Message::dump(const vector<string>* fieldNames, bool withConditions, ostrea
       } else {
         *output << FIELD_SEPARATOR;
       }
-      dumpField(fieldName, withConditions, output);
+      dumpField(fieldName, withConditions, outputFormat, output);
     }
     return;
   }
@@ -867,11 +870,11 @@ void Message::dump(const vector<string>* fieldNames, bool withConditions, ostrea
     } else {
       *output << FIELD_SEPARATOR;
     }
-    dumpField(fieldName, withConditions, output);
+    dumpField(fieldName, withConditions, outputFormat, output);
   }
 }
 
-void Message::dumpField(const string& fieldName, bool withConditions, ostream* output) const {
+void Message::dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output) const {
   if (fieldName == "type") {
     if (withConditions && m_condition != nullptr) {
       m_condition->dump(false, output);
@@ -928,46 +931,50 @@ void Message::dumpField(const string& fieldName, bool withConditions, ostream* o
     return;
   }
   if (fieldName == "fields") {
-    m_data->dump(false, false, output);
+    m_data->dump(false, outputFormat, output);
     return;
   }
-  dumpAttribute(false, false, fieldName, output);
+  dumpAttribute(false, outputFormat, fieldName, output);
 }
 
-void addData(const SymbolString& data, ostringstream* output) {
-  if (data.size() == 0) {
-    return;
-  }
-  *output << ",\n    \"" << (data.isMaster() ? "master" : "slave") << "\": [";
-  for (size_t pos = 0; pos < data.size(); pos++) {
-    if (pos > 0) {
-      *output << ", ";
-    }
-    *output << dec << static_cast<unsigned>(data[pos]);
-  }
-  *output << "]";
-}
-
-void Message::decodeJson(bool leadingSeparator, bool appendDirection, bool addRaw, OutputFormat outputFormat,
-    ostringstream* output) const {
+void Message::decodeJson(bool leadingSeparator, bool appendDirectionCondition, bool withData, bool addRaw,
+                         OutputFormat outputFormat, ostringstream* output) const {
+  outputFormat |= OF_JSON;
   if (leadingSeparator) {
-    *output << ",";
+    *output << ",\n";
   }
-  *output << "\n   \"" << getName();
-  if (appendDirection) {
+  *output << "   \"";
+  *output << getName();
+  if (appendDirectionCondition) {
     if (isPassive()) {
       *output << "-u";
     } else if (isWrite()) {
       *output << "-w";
     }
+    if (isConditional()) {
+      m_condition->dump(false, output);
+    }
   }
-  bool withDefinition = (outputFormat & OF_DEFINTION) != 0;
+  bool withDefinition = outputFormat & OF_DEFINITION;
   *output << "\": {"
           << "\n    \"name\": \"" << getName() << "\""
           << ",\n    \"passive\": " << (isPassive() ? "true" : "false")
-          << ",\n    \"write\": " << (isWrite() ? "true" : "false")
-          << ",\n    \"lastup\": " << setw(0) << dec << m_lastUpdateTime;
-  bool hasData = getLastUpdateTime() != 0;
+          << ",\n    \"write\": " << (isWrite() ? "true" : "false");
+  if (outputFormat & OF_ALL_ATTRS) {
+    *output << ",\n    \"level\": \"" << getLevel() << "\"";
+    if (getPollPriority()>0) {
+      *output << ",\n    \"pollprio\": " << setw(0) << dec << getPollPriority();
+    }
+    if (isConditional()) {
+      *output << ",\n    \"condition\": \"";
+      m_condition->dump(false, output);
+      *output << "\"";
+    }
+  }
+  if (withData) {
+    *output << ",\n    \"lastup\": " << setw(0) << dec << getLastUpdateTime();
+  }
+  bool hasData = withData && (getLastUpdateTime() != 0);
   if (hasData || withDefinition) {
     if (withDefinition && m_srcAddress != SYN) {
       *output << ",\n    \"qq\": " << dec << static_cast<unsigned>(m_srcAddress);
@@ -983,11 +990,11 @@ void Message::decodeJson(bool leadingSeparator, bool appendDirection, bool addRa
       }
       *output << "]";
     }
-    appendAttributes(OF_JSON | outputFormat, output);
+    appendAttributes(outputFormat, output);
     if (hasData) {
       if (addRaw) {
-        addData(m_lastMasterData, output);
-        addData(m_lastSlaveData, output);
+        m_lastMasterData.dumpJson(true, output);
+        m_lastSlaveData.dumpJson(true, output);
         *output << dec;
       }
       size_t pos = (size_t)output->tellp();
@@ -1004,7 +1011,7 @@ void Message::decodeJson(bool leadingSeparator, bool appendDirection, bool addRa
     }
     if (withDefinition) {
       *output << ",\n    \"fielddefs\": [";
-      m_data->dump(false, true, output);
+      m_data->dump(false, outputFormat, output);
       *output << "\n    ]";
     }
   }
@@ -1256,9 +1263,9 @@ result_t ChainedMessage::combineLastParts() {
   return result;
 }
 
-void ChainedMessage::dumpField(const string& fieldName, bool withConditions, ostream* output) const {
+void ChainedMessage::dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output) const {
   if (fieldName != "id") {
-    Message::dumpField(fieldName, withConditions, output);
+    Message::dumpField(fieldName, withConditions, outputFormat, output);
     return;
   }
   bool first = true;
@@ -1608,7 +1615,7 @@ bool SimpleNumericCondition::checkValue(const Message* message, const string& fi
 
 bool SimpleStringCondition::checkValue(const Message* message, const string& field) {
   ostringstream output;
-  result_t result = message->decodeLastData(false, field.length() == 0 ? nullptr : field.c_str(), -1, 0, &output);
+  result_t result = message->decodeLastData(false, field.length() == 0 ? nullptr : field.c_str(), -1, OF_NONE, &output);
   if (result == RESULT_OK) {
     string value = output.str();
     for (size_t i = 0; i < m_values.size(); i++) {
@@ -1670,7 +1677,7 @@ result_t Instruction::create(const string& contextPath, const string& type,
     auto it = row.find("file");
     string arg;
     if (it == row.end()) {
-      for (const auto entry : row) {  // fallback to first field
+      for (const auto& entry : row) {  // fallback to first field
         if (!entry.second.empty()) {
           arg = entry.second;
           break;
@@ -1863,43 +1870,37 @@ void MessageMap::remove(Message* message) {
   uint64_t key = message->getKey();
   bool conditional = message->isConditional();
   const auto keyIt = m_messagesByKey.find(key);
-  bool deleted = false;
+  bool needDelete = false;
   if (keyIt != m_messagesByKey.end()) {
-    vector<Message*> messages = keyIt->second;
-    for (auto it = messages.begin(); it != messages.end(); ) {
+    vector<Message*>* messages = &keyIt->second;
+    for (auto it = messages->begin(); it != messages->end(); ) {
       Message* other = *it;
       if (other == message) {
-        if (!deleted) {
-          deleted = true;
-          delete(other);
-        }
-        messages.erase(it);
+        needDelete = true;
+        it = messages->erase(it);
       } else {
         ++it;
       }
     }
-    if (messages.empty()) {
+    if (messages->empty()) {
       m_messagesByKey.erase(keyIt);
     }
   }
   bool storedByName = false;
   for (auto nameIt = m_messagesByName.begin(); nameIt != m_messagesByName.end(); ) {
-    vector<Message*> messages = nameIt->second;
-    for (auto it = messages.begin(); it != messages.end(); ) {
+    vector<Message*>* messages = &nameIt->second;
+    for (auto it = messages->begin(); it != messages->end(); ) {
       Message* other = *it;
       if (other == message) {
         storedByName = true;
-        if (!deleted) {
-          deleted = true;
-          delete(other);
-        }
-        messages.erase(it);
+        needDelete = true;
+        it = messages->erase(it);
       } else {
         ++it;
       }
     }
-    if (messages.empty()) {
-      m_messagesByName.erase(nameIt);
+    if (messages->empty()) {
+      nameIt = m_messagesByName.erase(nameIt);
     } else {
       ++nameIt;
     }
@@ -1916,6 +1917,9 @@ void MessageMap::remove(Message* message) {
   }
   if (message->getPollPriority() > 0) {
     m_pollMessages.remove(message);
+  }
+  if (needDelete) {
+    delete message;
   }
   unlock();
 }
@@ -2046,7 +2050,7 @@ result_t MessageMap::addDefaultFromFile(const string& filename, unsigned int lin
     // circuit level additional attributes
   }
   string defaultSuffix = AttributedItem::pluck("suffix", &defaults);
-  for (const auto entry : *row) {
+  for (const auto& entry : *row) {
     string value = entry.second;
     if (entry.first == "circuit" && !defaultCircuit.empty()) {  // TODO remove some day
       if (value.empty()) {
@@ -2426,7 +2430,7 @@ result_t MessageMap::executeInstructions(void (*readMessageFunc)(Message* messag
       it.second = remain;
     }
   }
-  for (const auto it : remove) {
+  for (const auto& it : remove) {
     m_instructions.erase(it);
   }
   return overallResult;
@@ -2532,7 +2536,7 @@ void MessageMap::findAll(const string& circuit, const string& name, const string
   bool checkCircuit = lcircuit.length() > 0;
   bool checkLevel = levels != "*";
   bool checkName = lname.length() > 0;
-  for (const auto it : m_messagesByName) {
+  for (const auto& it : m_messagesByName) {
     if (it.first[0] == FIELD_SEPARATOR) {  // avoid duplicates: instances stored multiple times have a special key
       continue;
     }
@@ -2733,7 +2737,7 @@ void MessageMap::clear() {
     it.second.clear();
   }
   // free remaining message instances by key
-  for (const auto it : m_messagesByKey) {
+  for (const auto& it : m_messagesByKey) {
     vector<Message*> keyMessages = it.second;
     for (auto message : keyMessages) {
       delete message;
@@ -2741,11 +2745,11 @@ void MessageMap::clear() {
     keyMessages.clear();
   }
   // free condition instances
-  for (const auto it : m_conditions) {
+  for (const auto& it : m_conditions) {
     delete it.second;
   }
   // free instruction instances
-  for (const auto it : m_instructions) {
+  for (const auto& it : m_instructions) {
     vector<Instruction*> instructions = it.second;
     for (const auto instruction : instructions) {
       delete instruction;
@@ -2761,7 +2765,7 @@ void MessageMap::clear() {
   m_messagesByKey.clear();
   m_conditions.clear();
   m_instructions.clear();
-  for (const auto it : m_circuitData) {
+  for (const auto& it : m_circuitData) {
     delete it.second;
   }
   m_circuitData.clear();
@@ -2786,11 +2790,18 @@ Message* MessageMap::getNextPoll() {
   return ret;
 }
 
-void MessageMap::dump(bool withConditions, ostream* output) const {
+void MessageMap::dump(bool withConditions, OutputFormat outputFormat, ostream* output) const {
   bool first = true;
-  Message::dumpHeader(nullptr, output);
-  *output << endl;
-  for (const auto it : m_messagesByName) {
+  bool isJson = (outputFormat & OF_JSON) != 0;
+  if (isJson) {
+    *output << "{";
+  } else {
+    Message::dumpHeader(nullptr, output);
+  }
+  if (!(outputFormat & OF_SHORT)) {
+    *output << endl;
+  }
+  for (const auto& it : m_messagesByName) {
     if (it.first[0] == FIELD_SEPARATOR) {  // skip instances stored multiple times (key starting with "-")
       continue;
     }
@@ -2799,28 +2810,46 @@ void MessageMap::dump(bool withConditions, ostream* output) const {
         if (!message) {
           continue;
         }
+        bool wasFirst = first;
         if (first) {
           first = false;
         } else {
           *output << endl;
         }
-        message->dump(nullptr, withConditions, output);
+        if (isJson) {
+          ostringstream str;
+          message->decodeJson(!wasFirst, true, false, false, outputFormat, &str);
+          *output << str.str();
+        } else {
+          message->dump(nullptr, withConditions, outputFormat, output);
+        }
       }
     } else {
       Message* message = getFirstAvailable(it.second);
       if (!message) {
         continue;
       }
+      bool wasFirst = first;
       if (first) {
         first = false;
       } else {
         *output << endl;
       }
-      message->dump(nullptr, withConditions, output);
+      if (isJson) {
+        ostringstream str;
+        message->decodeJson(!wasFirst, true, false, false, outputFormat, &str);
+        *output << str.str();
+      } else {
+        message->dump(nullptr, withConditions, outputFormat, output);
+      }
     }
   }
-  if (!first) {
-    *output << endl;
+  if (isJson) {
+    *output << "}" << endl;
+  } else {
+    if (!first) {
+      *output << endl;
+    }
   }
 }
 

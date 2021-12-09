@@ -3,11 +3,17 @@
 ./src/ebusd/ebusd -r -f -x >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f -d "" >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f -d "tcp:192.168.999.999:1" >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f -d "enh:192.168.999.999:1" >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f -d "/dev/ttyUSBx9" >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --nodevicecheck >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --readonly >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --scanconfig=full -r >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --latency 999999 >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f -c "" >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f -r --scanconfig=fe >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f -r --configlang=en >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --pollinterval 999999 >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --inject 01fe030400/ >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --address 999 >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --acquiretimeout 999999 >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --acquireretries 999999 >/dev/null 2>/dev/null
@@ -20,18 +26,30 @@
 ./src/ebusd/ebusd -f -r --scanconfig=0 >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --pidfile "" >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f -p 999999 >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --localhost >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --httpport 999999 >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --htmlpath "" >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --updatecheck=off >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f -l "" >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --log "all debug" >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --logareas some >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --loglevel unknown >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --lograwdata >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --lograwdata=bytes >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --lograwdatafile=/xyz >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --lograwdatasize=9999999 >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --dump >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --dumpfile "" >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --dumpsize 9999999 >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --dumpflush >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --accesslevel=inst >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --aclfile=/ >/dev/null 2>/dev/null
-./src/ebusd/ebusd -f --accesslevel >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --enablehex >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --enabledefine >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --mqttport= >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -f --mqttport=9999999 >/dev/null 2>/dev/null
-./src/ebusd/ebusd -f --mqttuser=username --mqttpass=password --mqttport=1883 --mqtttopic=ebusd --mqtthost "" >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --mqttuser=username --mqttpass=password --mqttclientid=1234 --mqttport=1883 --mqtttopic=ebusd/%circuit/%name/%field --mqttretain --mqttjson --mqttverbose --mqttlog --mqttignoreinvalid --mqttchanges --mqtthost "" >/dev/null 2>/dev/null
+./src/ebusd/ebusd -f --mqttca=/cafile/ --mqttcert=/cert --mqttkey=12345678 --mqttkeypass=secret --mqttinsecure >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -c contrib/etc/ebusd --checkconfig --dumpconfig -s -f -i "ff08070400/0ab5303132333431313131" >/dev/null
 ./src/ebusd/ebusd -c contrib/etc/ebusd --checkconfig --dumpconfig -s -f -i "ff08070400" >/dev/null 2>/dev/null
 ./src/ebusd/ebusd -c contrib/etc/ebusd --checkconfig --dumpconfig -s -f -i "ff080704/" >/dev/null 2>/dev/null
@@ -63,15 +81,6 @@ EOF
 ./src/ebusd/ebusd -c contrib/etc/ebusd --checkconfig >/dev/null
 rm -f contrib/etc/ebusd/bad.csv
 echo > dump
-./src/tools/ebusfeed -d tcp:127.0.0.1:8876 -t 10000 dump >/dev/null 2>/dev/null
-./src/tools/ebusfeed -d tcp:127.0.0.1:99999 dump >/dev/null 2>/dev/null
-./src/tools/ebusfeed -d udp:127.0.0.1:8876 -t 10000 dump >/dev/null 2>/dev/null
-./src/tools/ebusfeed -d udp:127.0.0.1:8876 -t 10000 nonexistdump >/dev/null 2>/dev/null
-./src/tools/ebusfeed -d "" >/dev/null 2>/dev/null
-./src/tools/ebusfeed -t 1 >/dev/null 2>/dev/null
-./src/tools/ebusfeed "" >/dev/null 2>/dev/null
-./src/tools/ebusfeed 1 2 >/dev/null 2>/dev/null
-./src/tools/ebusfeed -x >/dev/null 2>/dev/null
 ./src/tools/ebusctl -s testserver -p 100000 >/dev/null 2>/dev/null
 ./src/tools/ebusctl -s "" >/dev/null 2>/dev/null
 ./src/tools/ebusctl -p "" >/dev/null 2>/dev/null
@@ -198,18 +207,30 @@ w,mc.5,HeatingCurve,,,53,b509,0e3500,curve,m,UIN,100
 w,mc.5#installer,installparam,,,53,b509,0e3f00,param,m,UCH
 EOF
 mkdir -p "$PWD/contrib/etc/ebusd/153"
-cat >"$PWD/contrib/etc/ebusd/153/_templates" <<EOF
+cat >"$PWD/contrib/etc/ebusd/153/_templates.csv" <<EOF
+#
 temps,SCH,,°C,Temperatur
 EOF
-cat >"$PWD/contrib/etc/ebusd/153/36.bbb.csv" <<EOF
+cat >"$PWD/contrib/etc/ebusd/153/53.bbbbb.csv" <<EOF
+#
 *r,,,,,,"9900",,,,,,,
 r,,SoftwareVersion,,,,,"0000",,,HEX:4,,,
 EOF
-echo "test,testpass,installer" > ./passwd
+echo -e "#\ntest,testpass,installer" > acl.csv
 #ebusd:
-./src/ebusd/ebusd -d tcp:127.0.0.1:8876 --initsend --latency 10 -n -c "$PWD/contrib/etc/ebusd" --pollinterval=10 -s -a 31 --acquireretries 3 --answer --generatesyn --receivetimeout 40000 --sendretries 1 --enablehex --htmlpath "$PWD/contrib/html" --httpport 8878 --pidfile "$PWD/ebusd.pid" --localhost -p 8877 -l "$PWD/ebusd.log" --logareas all --loglevel debug --lograwdata=bytes --lograwdatafile "$PWD/ebusd.raw" --lograwdatasize 1 --dumpfile "$PWD/ebusd.dump" --dumpsize 100 -D --scanconfig --aclfile=./passwd --mqttport=1883
-sleep 3
-pid=`head -n 1 "$PWD/ebusd.pid"`
+if [[ "$1" == "manual" ]]; then
+  echo -e "\n\n\nSTART EBUSD NOW, enter the PID and press enter\n"
+  read pid
+elif [[ -n "$1" ]]; then
+  echo "waiting for ebusd to be started..."
+  while [[ -z "$pid" ]]; do
+    pid=$(ps -C ebusd -o pid=)
+  done
+else
+  ./src/ebusd/ebusd -d tcp:127.0.0.1:8876 --initsend --latency 10 -n -c "$PWD/contrib/etc/ebusd" --pollinterval=10 -s -a 31 --acquireretries 3 --answer --generatesyn --receivetimeout 40000 --sendretries 1 --enablehex --htmlpath "$PWD/contrib/html" --httpport 8878 --pidfile "$PWD/ebusd.pid" --localhost -p 8877 -l "$PWD/ebusd.log" --logareas all --loglevel debug --lograwdata=bytes --lograwdatafile "$PWD/ebusd.raw" --lograwdatasize 1 --dumpfile "$PWD/ebusd.dump" --dumpsize 100 -D --scanconfig --aclfile="$PWD/acl.csv" --mqttport=1883 --enablehex --enabledefine
+  sleep 3
+  pid=`head -n 1 "$PWD/ebusd.pid"`
+fi
 if [ -z "$pid" ]; then
   echo `date` "unable to start ebusd"
   kill $srvpid
@@ -217,7 +238,9 @@ if [ -z "$pid" ]; then
   exit 1
 fi
 echo `date` "ebusd: $pid"
-kill -1 $pid
+if [[ -n "$1" ]]; then
+  kill -1 $pid
+fi
 #client:
 readarray lines <<EOF
 raw bytes
@@ -242,12 +265,14 @@ h l
 h s
 h i
 h g
+h define
+h d
+h e
 h scan
 h log
 h raw
 h dump
 h reload
-h stop
 h q
 h h
 l &
@@ -259,10 +284,13 @@ r -v -v outsidetemp
 r -v -v -v outsidetemp
 r -V outsidetemp
 r -c broadcast outsidetemp
+r -s f0 -c broadcast outsidetemp
 r -c mc.4 -d 53 -p 2 outsidetemp
 r -c mc.4 -d 53 -p 2 -i 1 outsidetemp temp.1
 r -c mc.4 -d 53 -p 2 -i 1 outsidetemp temp.0
 r -n -c mc.4 -d 53 -p 2 -i 1 outsidetemp temp.0
+r -N -c mc.4 -d 53 -p 2 -i 1 outsidetemp temp.0
+r -N -c mc.4 -d 53 -p 2 -i 1 -def "r,cir,nam,cmt,,08,b509,,,,UCH" outsidetemp temp.0
 r -h
 r -h 53070400
 f -f outsidetemp
@@ -281,7 +309,7 @@ f -e -c mc.5 -l installer
 r -c mc.5 Timer.Monday
 w -c mc.5 Timer.Monday "-:-;-:-;-:-;-:-;-:-;-:-;Mo-So"
 w -c mc.5 Timer.Monday "00:00;23:50;00:30;00:50;03:30;06:00;Mo-Fr"
-w -c mc.5 -d 53 HeatingCurve 0.25
+w -c mc.5 -s f0 -d 53 HeatingCurve 0.25
 w -c mc.5 -d 53 installparam 123
 a b
 a test testpass
@@ -290,6 +318,8 @@ hex fe070400
 hex 53070400
 dump
 grab result
+grab result all
+grab result decode
 scan full
 r -c mc.5 -d g3 HeatingCurve
 r -c mc.5 -d 00 HeatingCurve
@@ -301,19 +331,33 @@ r -i
 r -Z
 r -h fe070400
 w -h fe070400
+s
+i
+g
+define -r "r,cir,nam,cmt,,08,b509,,,,UCH"
+decode -V -N UCH 102030
+encode UCH 10;1
+raw bytes
+raw
+reload
 nocommand
 EOF
 status=1
 cnt=3
+function send() {
+#  ./src/tools/ebusctl -p 8877 -t 10 "$@"
+  echo "$@" | nc -N -w 10 localhost 8877
+}
 while [[ ! "$status" = 0 ]] && [[ $cnt -gt 0 ]]; do
   sleep 5
   echo `date` "check signal"
-  ./src/tools/ebusctl -p 8877 state | egrep -q "signal acquired"
+  send state | egrep -q "signal acquired"
   status=$?
   cnt=$((cnt - 1))
 done
 if [ "$status" != 0 ]; then
-  echo `date` "unable to acquire signal"
+  echo `date` "unable to acquire signal, state:"
+  send state
   kill $pid
   kill $srvpid
   echo `date` "ebusd log:"
@@ -328,37 +372,68 @@ lstpid=$!
 for line in "${lines[@]}"; do
   if [ -n "$line" ]; then
     echo `date` "send: $line"
-    ./src/tools/ebusctl -p 8877 $line
+    send $line
+    if [ $? -eq 1 ]; then
+      echo "not connectable, exit"
+      status=1
+      failed=1
+      break
+    fi
   fi
 done
+scancnt=0
+failed=0
 while [ "$status" = 0 ]; do
-  ./src/tools/ebusctl -p 8877 scan result | egrep -q "still running"
+  sleep 3
+  output=$(send scan result)
   status=$?
+  if [ $status -ne 0 ]; then
+    echo "scan result status=$status"
+    failed=1
+    break
+  fi
+  echo $output | egrep -q "still running"
+  status=$?
+  scancnt=$(( scancnt + 1 ))
 done
-echo `date` "scan result:"
-./src/tools/ebusctl -p 8877 scan result
+echo `date` "scan result after $scancnt checks:"
+send scan result
+if [ $? -ne 0 ]; then
+  failed=1
+fi
 curl -s "http://localhost:8878/data/" >/dev/null
 curl -s "http://localhost:8878/data/broadcast/?since=1&exact=1&required=" >/dev/null
 curl -s "http://localhost:8878/data/mc.4/outsidetemp?poll=1" >/dev/null
 curl -s "http://localhost:8878/data/?verbose=1" >/dev/null
 curl -s "http://localhost:8878/data/?indexed=1&numeric=1" >/dev/null
-curl -s "http://localhost:8878/data/?full" >/dev/null
+curl -s "http://localhost:8878/data/?full&valuename&write&raw&def" >/dev/null
+curl -s "http://localhost:8878/data/mc.4/outsidetemp2?define=r,mc.4,outsidetemp2,,,52,0102,,,,UCH" >/dev/null
+curl -s "http://localhost:8878/datatypes" >/dev/null
+curl -s "http://localhost:8878/raw" >/dev/null
+curl -s "http://localhost:8878/decode?def=UCH&raw=1f" >/dev/null
 curl -s "http://localhost:8878/data/mc.5/installparam?poll=1&user=test&secret=testpass" >/dev/null
-curl -T .travis.yml http://localhost:8878/data/
+curl -s -T test_coverage.sh http://localhost:8878/data/
 echo `date` "commands done"
 kill $lstpid
-verify=`./src/tools/ebusctl -p 8877 info|egrep "^address 04:"`
+verify=`send info|egrep "^address 04:"`
 if [ "x$verify" != 'xaddress 04: slave #25, scanned "MF=153;ID=BBBBB;SW=3031;HW=3031"' ]; then
   echo `date` "error unexpected result from info command: $verify"
+  ls -latr
   kill $pid
   kill $srvpid
   echo `date` "ebusd log:"
   cat "$PWD/ebusd.log"
   exit 1
 fi
+send log all debug
+if [[ -z "$1" ]]; then
+  kill $pid
+else
+  kill -9 $pid
+fi
 sleep 2
-kill $pid
 echo `date` "ebusd log:"
 cat "$PWD/ebusd.log"
 echo `date` "done."
 wait $srvpid
+exit $failed

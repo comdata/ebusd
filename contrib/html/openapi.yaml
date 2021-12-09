@@ -1,0 +1,744 @@
+openapi: 3.0.1
+info:
+  title: ebusd-http
+  description: The API that ebusd provides on HTTP port.
+  version: "21.3"
+servers:
+  - url: http://127.0.0.1:8080/
+paths:
+  /data:
+    get:
+      summary: Get all messages of all circuits.
+      parameters:
+        - $ref: '#/components/parameters/sinceQuery'
+        - $ref: '#/components/parameters/pollQuery'
+        - $ref: '#/components/parameters/verboseQuery'
+        - $ref: '#/components/parameters/indexedQuery'
+        - $ref: '#/components/parameters/numericQuery'
+        - $ref: '#/components/parameters/valuenameQuery'
+        - $ref: '#/components/parameters/fullQuery'
+        - $ref: '#/components/parameters/requiredQuery'
+        - $ref: '#/components/parameters/writeQuery'
+        - $ref: '#/components/parameters/rawQuery'
+        - $ref: '#/components/parameters/defQuery'
+        - $ref: '#/components/parameters/userQuery'
+        - $ref: '#/components/parameters/secretQuery'
+      responses:
+        200:
+          description: Success.
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Data'
+        400:
+          description: Invalid request parameters.
+          content: { }
+        403:
+          description: User not authorized.
+          content: { }
+        404:
+          description: Circuit or message not found.
+          content: { }
+        500:
+          description: General error.
+          content: { }
+  /data/{circuit}:
+    get:
+      summary: Get all messages of a particular circuit.
+      parameters:
+        - name: circuit
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/sinceQuery'
+        - $ref: '#/components/parameters/pollQuery'
+        - $ref: '#/components/parameters/exactQuery'
+        - $ref: '#/components/parameters/verboseQuery'
+        - $ref: '#/components/parameters/indexedQuery'
+        - $ref: '#/components/parameters/numericQuery'
+        - $ref: '#/components/parameters/valuenameQuery'
+        - $ref: '#/components/parameters/fullQuery'
+        - $ref: '#/components/parameters/requiredQuery'
+        - $ref: '#/components/parameters/writeQuery'
+        - $ref: '#/components/parameters/rawQuery'
+        - $ref: '#/components/parameters/defQuery'
+        - $ref: '#/components/parameters/userQuery'
+        - $ref: '#/components/parameters/secretQuery'
+      responses:
+        200:
+          description: Success.
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Data'
+        400:
+          description: Invalid request parameters.
+          content: { }
+        403:
+          description: User not authorized.
+          content: { }
+        404:
+          description: Circuit or message not found.
+          content: { }
+        500:
+          description: General error.
+          content: { }
+  /data/{circuit}/{message}:
+    get:
+      summary: Get a particular message of a particular circuit.
+      parameters:
+        - name: circuit
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: message
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/sinceQuery'
+        - $ref: '#/components/parameters/pollQuery'
+        - $ref: '#/components/parameters/exactQuery'
+        - $ref: '#/components/parameters/verboseQuery'
+        - $ref: '#/components/parameters/indexedQuery'
+        - $ref: '#/components/parameters/numericQuery'
+        - $ref: '#/components/parameters/valuenameQuery'
+        - $ref: '#/components/parameters/fullQuery'
+        - $ref: '#/components/parameters/requiredQuery'
+        - $ref: '#/components/parameters/writeQuery'
+        - $ref: '#/components/parameters/rawQuery'
+        - $ref: '#/components/parameters/defQuery'
+        - $ref: '#/components/parameters/defineQuery'
+        - $ref: '#/components/parameters/userQuery'
+        - $ref: '#/components/parameters/secretQuery'
+      responses:
+        200:
+          description: Success
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Data'
+        500:
+          description: Circuit or message not found.
+          content: { }
+  /datatypes:
+    get:
+      summary: Get all known field data types.
+      responses:
+        200:
+          description: Success.
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DataTypes'
+        400:
+          description: Invalid request parameters.
+          content: { }
+        403:
+          description: User not authorized.
+          content: { }
+        404:
+          description: Circuit or message not found.
+          content: { }
+        500:
+          description: General error.
+          content: { }
+  /raw:
+    get:
+      summary: Retrieve raw data from grabbed and/or decoded messages.
+      parameters:
+        - $ref: '#/components/parameters/sinceQuery'
+      responses:
+        200:
+          description: Success
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RawMessages'
+  /decode:
+    get:
+      summary: Decode raw data with the specified field defintion.
+      parameters:
+        - name: def
+          in: query
+          description: the field definition (starting with type).
+          allowEmptyValue: false
+          required: true
+          schema:
+            type: string
+        - name: raw
+          in: query
+          description: the raw symbols to decode as hex sequence.
+          required: true
+          allowEmptyValue: false
+          schema:
+            type: string
+            pattern: '^([0-9a-f][0-9a-f])+$'
+      responses:
+        200:
+          description: Success
+          content:
+            application/json;charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/FieldValue'
+  /{file}:
+    get:
+      summary: Retrieve a particular file.
+      parameters:
+        - name: file
+          in: path
+          description: the file to retrieve.
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Success
+          content:
+            text/html:
+              schema:
+                type: string
+                format: binary
+            text/css:
+              schema:
+                type: string
+                format: binary
+            application/javascript:
+              schema:
+                type: string
+                format: binary
+            image/png:
+              schema:
+                type: string
+                format: binary
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+            image/svg+xml:
+              schema:
+                type: string
+                format: binary
+            application/json;charset=utf-8:
+              schema:
+                type: string
+                format: binary
+            application/yaml;charset=utf-8:
+              schema:
+                type: string
+                format: binary
+        400:
+          description: Invalid request parameters.
+          content: { }
+        403:
+          description: User not authorized.
+          content: { }
+        404:
+          description: Circuit or message not found.
+          content: { }
+        500:
+          description: General error.
+          content: { }
+#    head:
+#      summary: Retrieve headers for a certain file.
+#      parameters:
+#        - name: file
+#          in: path
+#          description: the file to retrieve.
+#          required: true
+#          schema:
+#            type: string
+#      responses:
+#        200:
+#          description: Success
+#          content:
+#            application/json;charset=utf-8:
+#              schema:
+#                $ref: '#/components/schemas/Data'
+#        400:
+#          description: Circuit or message not found.
+#          content: { }
+
+components:
+  schemas:
+    Global:
+      required:
+        - version
+        - signal
+        - reconnects
+        - masters
+        - messages
+        - lastup
+      type: object
+      properties:
+        version:
+          pattern: '[0-9]+\.[0-9]+\.[0-9a-f]+\.'
+          type: string
+          description: the ebusd version (major.minor.sha1 or major.minor.date).
+          example: 3.0.1234abc
+        updatecheck:
+          type: string
+          description: the result of update check ("OK" or string describing available
+            updates).
+          example: revision 1234abd available, 5 newer configuration files available
+        user:
+          type: string
+          description: logged in user name.
+        access:
+          type: string
+          description: access level(s) of the logged in user.
+        signal:
+          type: boolean
+          description: whether signal is available.
+          example: true
+        symbolrate:
+          minimum: 0
+          type: integer
+          description: the current symbol rate on the bus.
+          example: 31
+        maxsymbolrate:
+          minimum: 0
+          type: integer
+          description: the maximum symbol rate on the bus seen since start.
+          example: 167
+        minarbitrationmicros:
+          minimum: 0
+          type: integer
+          description: the minimum arbitration delay in microseconds.
+          example: 4231
+        maxarbitrationmicros:
+          minimum: 0
+          type: integer
+          description: the maximum arbitration delay in microseconds.
+          example: 4892
+        minsymbollatency:
+          minimum: 0
+          type: integer
+          description: the minimum symbol latency in milliseconds.
+          example: 4
+        maxsymbollatency:
+          minimum: 0
+          type: integer
+          description: the maximum symbol latency in milliseconds.
+          example: 9
+        qq:
+          maximum: 255
+          minimum: 0
+          type: integer
+          description: the ebusd master address (only if not readonly).
+          example: 49
+        reconnects:
+          minimum: 0
+          type: integer
+          description: the number of reconnects to the device since start.
+          example: 0
+        masters:
+          minimum: 0
+          type: integer
+          description: the number of masters recognized on the bus.
+          example: 5
+        messages:
+          minimum: 0
+          type: integer
+          description: the number of known message definitions.
+          example: 893
+        lastup:
+          minimum: 0
+          type: integer
+          description: the time in UTC seconds of the last update of any message.
+          example: 1493483370
+    Circuit:
+      type: object
+      properties:
+        name:
+          type: string
+          description: the circuit name.
+        zz:
+          maximum: 255
+          minimum: 0
+          type: integer
+          description: the circuit slave address.
+          example: 8
+        messages:
+          type: object
+          description: the messages with the unique key per circuit.
+          additionalProperties:
+            $ref: '#/components/schemas/Message'
+    Message:
+      required:
+        - name
+        - passive
+        - write
+        - lastup
+      type: object
+      properties:
+        name:
+          type: string
+          description: the message name.
+        passive:
+          type: boolean
+          description: true when this is a passive message.
+        write:
+          type: boolean
+          description: true for a write message, false for a read message.
+        level:
+          type: string
+          description: the access level for the message (only with full).
+        pollprios:
+          description: the poll priority of the message (only with full).
+          type: integer
+          minimum: 0
+        condition:
+          type: string
+          description: the condition string in case of a conditional message (only with full).
+        lastup:
+          minimum: 0
+          type: integer
+          description: the time in UTC seconds of the last update of the message (0
+            for never).
+        qq:
+          maximum: 255
+          minimum: 0
+          type: integer
+          description: limited source master address (only with def or data).
+          example: 49
+        zz:
+          maximum: 255
+          minimum: 0
+          type: integer
+          description: destination master or slave address.
+          example: 8
+        id:
+          type: array
+          description: the message ID composed of PBSB and further master data bytes
+            (only with def).
+          items:
+            maximum: 255
+            minimum: 0
+            type: integer
+        comment:
+          type: string
+          description: the message comment (only with verbose).
+        master:
+          $ref: '#/components/schemas/Symbols'
+          description: the last seen master data bytes (only with raw and if available).
+        slave:
+          $ref: '#/components/schemas/Symbols'
+          description: the last seen slave data bytes (only with raw and if available).
+        fields:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Field'
+          description: the decoded fields the message is composed of (only if available).
+        decodeerror:
+          type: string
+          description: set to the error message instead of fields in case of a decoding error.
+        fielddefs:
+          type: array
+          description: the field definitions the message is composed of (only with
+            def).
+          items:
+            $ref: '#/components/schemas/FieldDef'
+    Symbols:
+      description: master or slave data bytes.
+      type: array
+      minItems: 1
+      maximum: 32
+      items:
+        maximum: 255
+        minimum: 0
+        type: integer
+    Field:
+      type: object
+      properties:
+        name:
+          type: string
+          description: the field name.
+        value:
+          $ref: '#/components/schemas/FieldValue'
+          description: the field value.
+        unit:
+          type: string
+          description: the field unit (only with verbose).
+        comment:
+          type: string
+          description: the field comment (only with verbose).
+    FieldValue:
+      description: the field value.
+      oneOf:
+        - type: string
+        - type: number
+      nullable: true
+    FieldDef:
+      required:
+        - name
+        - slave
+        - type
+        - isbits
+        - length
+      type: object
+      properties:
+        name:
+          type: string
+          description: the field name.
+        slave:
+          type: boolean
+          description: whether the field is part of the slave data.
+        type:
+          type: string
+          description: the field type.
+        isbits:
+          type: boolean
+          description: true when the length is in bits.
+        length:
+          type: number
+          description: the field length in bytes (-1 for remainder, number of bits
+            when isbits is true).
+        divisor:
+          type: number
+          description: the divisor for numeric types (only if applicable, positive
+            for divisor, negative for reciprocal i.e. 1/-divisor).
+        value:
+          type: string
+          description: the constant value (only if applicable).
+        verify:
+          type: boolean
+          description: whether the constant value is verified when decoding (only
+            if applicable).
+        values:
+          type: object
+          additionalProperties:
+            type: string
+            description: the value name.
+          description: the raw numeric value to name assignments (only if applicable).
+        unit:
+          type: string
+          description: the field unit.
+        comment:
+          type: string
+          description: the field comment.
+    DataType:
+      description: a known field data type.
+      type: object
+      properties:
+        type:
+          type: string
+          description: the type name.
+          example: UCH
+        isbits:
+          type: boolean
+          description: true when the length is in bits.
+        isadjustable:
+          type: boolean
+          description: whether the length is adjustable.
+        isignored:
+          type: boolean
+          description: whether the result is ignored.
+        length:
+          type: number
+          minimum: -1
+          maximum: 31
+          description: the field length in bytes (-1 for remainder, number
+            of bits when isbits is true).
+        result:
+          enum:
+            - void
+            - string
+            - number
+            - date
+            - time
+            - datetime
+          description: the result type.
+        divisor:
+          type: number
+          description: the divisor for numeric types (only if applicable, positive
+            for divisor, negative for reciprocal i.e. 1/-divisor).
+        precision:
+          type: number
+          description: the precision (number of fraction digits) when divisor is >1.
+      required:
+        - type
+        - isbits
+        - length
+    DataTypes:
+      type: array
+      description: the known field data types.
+      items:
+        $ref: '#/components/schemas/DataType'
+    Data:
+      required:
+        - global
+      type: object
+      properties:
+        global:
+          $ref: '#/components/schemas/Global'
+      additionalProperties:
+        $ref: '#/components/schemas/Circuit'
+    RawMessage:
+      type: object
+      description: raw message seen on the bus.
+      properties:
+        master:
+          $ref: '#/components/schemas/Symbols'
+          description: the last seen master data bytes (only with raw and if available).
+        slave:
+          $ref: '#/components/schemas/Symbols'
+          description: the last seen slave data bytes (only with raw and if available).
+        lastup:
+          minimum: 0
+          type: integer
+          description: the time in UTC seconds of the last update of the message (0
+            for never).
+        count:
+          type: number
+          description: number of times the master part was seen.
+        circuit:
+          type: string
+          description: name of the circuit in case of an already associated message definition.
+        name:
+          type: string
+          description: name of the message in case of an already associated message definition.
+      required:
+        - master
+        - count
+    RawMessages:
+      type: array
+      description: raw messages seen on the bus.
+      items:
+        $ref: '#/components/schemas/RawMessage'
+  responses:
+    BadRequest:
+      description: Invalid request parameters.
+      content: { }
+    GeneralError:
+      description: General error.
+      content: { }
+    NotAuthorized:
+      description: User not authorized.
+      content: { }
+    NotFound:
+      description: Circuit or message not found.
+      content: { }
+  parameters:
+    circuitParam:
+      name: circuit
+      in: path
+      required: true
+      schema:
+        type: string
+    messageParam:
+      name: message
+      in: path
+      required: true
+      schema:
+        type: string
+    sinceQuery:
+      name: since
+      in: query
+      description: limit to messages that have changed since the specified UTC seconds.
+      allowEmptyValue: false
+      schema:
+        minimum: 0
+        type: integer
+    pollQuery:
+      name: poll
+      in: query
+      description: set the poll priority of matching message(s) to prio.
+      allowEmptyValue: false
+      schema:
+        minimum: 0
+        type: integer
+    exactQuery:
+      name: exact
+      in: query
+      description: exact search for circuit/message name.
+      allowEmptyValue: true
+      schema:
+        type: boolean
+    verboseQuery:
+      name: verbose
+      in: query
+      description: include comments and field units.
+      allowEmptyValue: true
+      schema:
+        type: boolean
+    indexedQuery:
+      name: indexed
+      in: query
+      description: always return field indexes instead of names.
+      allowEmptyValue: true
+      schema:
+        type: boolean
+    numericQuery:
+      name: numeric
+      in: query
+      description: return numeric values of value list entries.
+      allowEmptyValue: true
+      schema:
+        type: boolean
+    valuenameQuery:
+      name: valuename
+      in: query
+      description: include value and name for named values.
+      allowEmptyValue: true
+      schema:
+        type: boolean
+    fullQuery:
+      name: full
+      in: query
+      description: include all available attributes.
+      allowEmptyValue: true
+      schema:
+        type: boolean
+    requiredQuery:
+      name: required
+      in: query
+      description: retrieve the data from the bus if not yet cached.
+      allowEmptyValue: true
+      schema:
+        type: boolean
+    writeQuery:
+      name: write
+      in: query
+      description: retrieve write messages in addition to read/poll messages.
+      allowEmptyValue: true
+      schema:
+        type: boolean
+    rawQuery:
+      name: raw
+      in: query
+      description: include raw master/slave data.
+      allowEmptyValue: true
+      schema:
+        type: boolean
+    defQuery:
+      name: def
+      in: query
+      description: include message and field definition.
+      allowEmptyValue: true
+      schema:
+        type: boolean
+    defineQuery:
+      name: define
+      in: query
+      description: update/replace a message definition.
+      allowEmptyValue: false
+      schema:
+        type: string
+        description: message definition in CSV format.
+    userQuery:
+      name: user
+      in: query
+      description: authenticate with user name.
+      allowEmptyValue: false
+      schema:
+        type: string
+    secretQuery:
+      name: secret
+      in: query
+      description: authenticate with user secret.
+      allowEmptyValue: false
+      schema:
+        type: string

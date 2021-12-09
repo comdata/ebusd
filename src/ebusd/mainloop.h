@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -161,10 +161,11 @@ class MainLoop : public Thread, DeviceListener {
    * @param args the arguments passed to the command.
    * @param argPos the index of the first argument to parse.
    * @param srcAddress the source address to set, or @a SYN for the own master address.
+   * @param autoLength true to determine the data length automatically.
    * @param master the @a MasterSymbolString to write the data to.
    * @return the result from parsing the arguments.
    */
-  result_t parseHexMaster(const vector<string>& args, size_t argPos, symbol_t srcAddress,
+  result_t parseHexMaster(const vector<string>& args, size_t argPos, symbol_t srcAddress, bool autoLength,
       MasterSymbolString* master);
 
   /**

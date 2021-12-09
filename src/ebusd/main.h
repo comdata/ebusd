@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -42,13 +42,14 @@ struct options {
   unsigned int extraLatency;  //!< extra transfer latency in ms [0 for USB, 10 for IP]
 
   const char* configPath;  //!< path to CSV configuration files [http://ebusd.eu/config/]
+  const char* overridePath;  //!< path to CSV configuration files to override the main files with
   bool scanConfig;  //!< pick configuration files matching initial scan
   /** the initial address to scan for scanconfig
    * (@a ESC=none, 0xfe=broadcast ident, @a SYN=full scan, else: single slave address). */
   symbol_t initialScan;
   const char* preferLanguage;  //!< preferred language in configuration files
-  bool checkConfig;  //!< check CSV config files, then stop
-  bool dumpConfig;   //!< dump CSV config files, then stop
+  bool checkConfig;  //!< check config files, then stop
+  OutputFormat dumpConfig;   //!< dump config files, then stop
   unsigned int pollInterval;  //!< poll interval in seconds, 0 to disable [5]
   bool injectMessages;  //!< inject remaining arguments as already seen messages
 

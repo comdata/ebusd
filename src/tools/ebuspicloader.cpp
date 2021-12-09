@@ -20,6 +20,8 @@
 #include <poll.h>
 #include <sys/stat.h>
 #include <sys/file.h>
+#include <sys/types.h>
+#include <dirent.h>
 #include <time.h>
 #include <termios.h>
 #include <unistd.h>
@@ -39,7 +41,7 @@ const char *argp_program_version = "eBUS adapter PIC firmware loader";
 /** the documentation of the program. */
 static const char argpdoc[] =
     "A tool for loading firmware to the eBUS adapter PIC."
-    "\vPORT is the serial port to use (e.g./dev/ttyUSB0)";
+    "\vPORT is the serial port to use (e.g./dev/ttyUSB0) also supporting a trailing wildcard '*' for testing multiple ports.";
 
 static const char argpargsdoc[] = "PORT";
 
@@ -50,6 +52,8 @@ static const struct argp_option argpoptions[] = {
     {"ip",      'i', "IP",    0, "set fix IP address (e.g. 192.168.0.10)", 0 },
     {"mask",    'm', "MASK",  0, "set fix IP mask (e.g. 24)", 0 },
     {"macip",   'M', nullptr, 0, "set the MAC address suffix from the IP address", 0 },
+    {"arbdel",  'a', "US",    0, "set arbitration delay to US microseconds (0-620 in steps of 10, default 200"
+                                 ", since firmware 20211128)", 0 },
     {"flash",   'f', "FILE",  0, "flash the FILE to the device", 0 },
     {"reset",   'r', nullptr, 0, "reset the device at the end on success", 0 },
     {"slow",    's', nullptr, 0, "use low speed for transfer", 0 },
@@ -63,6 +67,8 @@ static uint8_t setIpAddress[] = {0, 0, 0, 0};
 static bool setMacFromIp = false;
 static bool setMask = false;
 static uint8_t setMaskLen = 0x1f;
+static bool setArbitrationDelay = false;
+static uint16_t setArbitrationDelayMicros = 0;
 static char* flashFile = nullptr;
 static bool reset = false;
 static bool lowSpeed = false;
@@ -138,7 +144,7 @@ error_t parse_opt(int key, char *arg, struct argp_state *state) {
       }
       setIp = true;
       break;
-    case 'm':
+    case 'm': // --mask=24
       if (arg == nullptr || arg[0] == 0) {
         argp_error(state, "invalid IP mask");
         return EINVAL;
@@ -153,20 +159,31 @@ error_t parse_opt(int key, char *arg, struct argp_state *state) {
       }
       setMask = true;
       break;
-    case 'M':
+    case 'M': // --macip
       setMacFromIp = true;
       break;
-    case 'f':
+    case 'a': // --arbdel=1000
+      if (arg == nullptr || arg[0] == 0) {
+        argp_error(state, "invalid arbitration delay");
+        return EINVAL;
+      }
+      if (!parseShort(arg, 0, 620, &setArbitrationDelayMicros)) {
+        argp_error(state, "invalid arbitration delay");
+        return EINVAL;
+      }
+      setArbitrationDelay = true;
+      break;
+    case 'f': // --flash=firmware.hex
       if (arg == nullptr || arg[0] == 0 || stat(arg, &st) != 0 || !S_ISREG(st.st_mode)) {
         argp_error(state, "invalid flash file");
         return EINVAL;
       }
       flashFile = arg;
       break;
-    case 'r':
+    case 'r': // --reset
       reset = true;
       break;
-    case 's':
+    case 's': // --slow
       lowSpeed = true;
       break;
     default:
@@ -674,12 +691,15 @@ int calcFileChecksum(uint8_t* storeFirstBlock = nullptr) {
   }
   unsigned long blockStart = END_BOOT_BYTES;
   uint16_t checkSum = 0;
+  uint16_t skipped = 0;
   while (blockStart < END_FLASH_BYTES && nextAddr < END_FLASH_BYTES) {
     for (int pos = 0; pos < WRITE_FLASH_BLOCKSIZE; pos++, nextAddr++) {
       unsigned long addr = ih.currentAddress();
       uint8_t value = (pos&0x1) == 1 ? 0x3f : 0xff;
       if (addr == nextAddr && ih.getData(&value)) {
         ih.incrementAddress();
+      } else {
+        skipped++;
       }
       if (storeFirstBlock && nextAddr < END_BOOT_BYTES+0x10) {
         storeFirstBlock[pos] = value;
@@ -688,12 +708,19 @@ int calcFileChecksum(uint8_t* storeFirstBlock = nullptr) {
     }
     blockStart += WRITE_FLASH_BLOCKSIZE;
   }
+  if (nextAddr-END_BOOT_BYTES != ih.size()+skipped) {
+    std::cout << "unable to fully read file." << std::endl;
+    return -1;
+  }
   return checkSum;
 }
 
 void printFileChecksum() {
   uint8_t data[0x10];
   int checkSum = calcFileChecksum(data);
+  if (checkSum < 0) {
+    return;
+  }
   int newFirmwareVersion = -1;
   if (data[0x2*2] == 0xae && data[0x2*2+1] == 0x34 && data[0x3*2+1] == 0x34) {
     newFirmwareVersion = data[0x3*2];
@@ -752,6 +779,7 @@ bool flashPic(int fd) {
   }
   unsigned long blockStart = END_BOOT_BYTES;
   uint16_t checkSum = 0;
+  uint16_t skipped = 0;
   int eraseRes = eraseFlash(fd, blockStart/2, (endAddr-blockStart)/2);
   if (eraseRes != 0) {
     std::cerr << "erasing flash failed: " << static_cast<signed>(-eraseRes-1) << std::endl;
@@ -769,6 +797,8 @@ bool flashPic(int fd) {
       if (addr == nextAddr && ih.getData(&value)) {
         ih.incrementAddress();
         blank = false;
+      } else {
+        skipped++;
       }
       buf[pos] = value;
       checkSum += ((uint16_t)value) << ((pos&0x1)*8);
@@ -795,6 +825,9 @@ bool flashPic(int fd) {
     blockStart += WRITE_FLASH_BLOCKSIZE;
   }
   std::cout << std::endl << "flashing finished." << std::endl;
+  if (nextAddr-END_BOOT_BYTES != ih.size()+skipped) {
+    std::cout << "unable to fully read file." << std::endl;
+  }
   int picSum = calcChecksum(fd, startAddr/2, blockStart-startAddr);
   if (picSum < 0) {
     std::cout << "unable to read checksum." << std::endl;
@@ -808,7 +841,7 @@ bool flashPic(int fd) {
   return true;
 }
 
-void readIpSettings(int fd) {
+void readSettings(int fd) {
   uint8_t mac[] = {0xae, 0xb0, 0x53, 0xef, 0xfe, 0xef};  // "Adapter-eBUS3" + (UserID or MUI)
   uint8_t ip[4] = {0, 0, 0, 0};
   bool useMUI = true;
@@ -826,9 +859,10 @@ void readIpSettings(int fd) {
   if (useMUI) {
     // read MUI to build uniqueMAC address
     // start with MUI6, end with MUI8 (MUI9 is reserved)
-    readConfig(fd, 0x0106, 8, true, false, configData);  // MUI
+    uint8_t mui[8];
+    readConfig(fd, 0x0106, 8, true, false, mui);  // MUI
     for (int i=0; i < 3; i++) {
-      mac[3+i] = configData[i*2];
+      mac[3+i] = mui[i*2];
     }
   }
   std::cout << "MAC address:";
@@ -859,10 +893,18 @@ void readIpSettings(int fd) {
     std::cout << std::endl;
     */
   }
+  uint16_t arbitrationDelay = configData[3]&0x3f;
+  std::cout << "Arbitration delay: ";
+  if (arbitrationDelay==0x3f) {
+    std::cout << "200 us (default)" << std::endl;
+  } else {
+    arbitrationDelay *= 10; // steps of 10us
+    std::cout << std::dec << static_cast<unsigned>(arbitrationDelay) << " us" << std::endl;
+  }
 }
 
-bool writeIpSettings(int fd) {
-  std::cout << "Writing IP settings: ";
+bool writeSettings(int fd) {
+  std::cout << "Writing settings: ";
   uint8_t configData[] = {0xff, 0x3f, 0xff, 0x3f, 0xff, 0x3f, 0xff, 0x3f};
   if (setMacFromIp) {
     configData[1] &= ~0x20;  // set useMUI
@@ -873,6 +915,9 @@ bool writeIpSettings(int fd) {
       configData[i * 2] = setIpAddress[i];
     }
   }
+  if (setArbitrationDelay) {
+    configData[3] = setArbitrationDelayMicros/10;
+  }
   if (writeConfig(fd, 0x0000, 8, configData) != 0) {
     std::cerr << "failed" << std::endl;
     return false;
@@ -880,6 +925,8 @@ bool writeIpSettings(int fd) {
   std::cout << "done." << std::endl;
   return true;
 }
+
+int run(int fd);
 
 int main(int argc, char* argv[]) {
   struct argp aargp = { argpoptions, parse_opt, argpargsdoc, argpdoc, nullptr, nullptr, nullptr };
@@ -900,20 +947,51 @@ int main(int argc, char* argv[]) {
       printFileChecksum();
       exit(EXIT_SUCCESS);
     } else {
-      argp_help(&aargp, stderr, ARGP_HELP_STD_ERR, "ebuspicloader");
+      argp_help(&aargp, stderr, ARGP_HELP_STD_ERR, const_cast<char*>("ebuspicloader"));
       exit(EXIT_FAILURE);
     }
   }
+  std::string port = argv[arg_index];
+  std::string::size_type pos = port.find('*');
+  if (pos==std::string::npos || pos != port.length()-1) {
+    int fd = openSerial(argv[arg_index]);
+    if (fd < 0) {
+      exit(EXIT_FAILURE);
+    }
+    return run(fd);
+  }
 
-  int fd = openSerial(argv[arg_index]);
-  if (fd < 0) {
+  std::string::size_type sep = port.find_last_of('/');
+  std::string base = sep==std::string::npos ? "" : port.substr(0, sep);
+  DIR* dir = opendir(base.c_str());
+  if (!dir) {
+    std::cerr << "Unable to open directory " << base << std::endl;
     exit(EXIT_FAILURE);
   }
 
+  std::string prefix = sep==std::string::npos ? port.substr(0, pos) : port.substr(sep + 1, pos - 1 - sep);
+  struct dirent* ent;
+  while ((ent = readdir(dir))) {
+    if (std::string(ent->d_name).substr(0, prefix.length()) != prefix) {
+      continue;
+    }
+    std::string name = base + "/" + ent->d_name;
+    std::cout << "Trying " << name << "..." << std::endl;
+    int fd = openSerial(name);
+    if (fd < 0) {
+      std::cerr << "Unable to open " << name << std::endl;
+      continue;
+    }
+    run(fd);
+  }
+  return 0;
+}
+
+int run(int fd) {
   // read version
   if (readVersion(fd, verbose) != 0) {
     closeSerial(fd);
-    exit(EXIT_FAILURE);
+    return EXIT_FAILURE;
   }
   uint8_t data[0x10];
   if (verbose) {
@@ -931,6 +1009,10 @@ int main(int argc, char* argv[]) {
     readConfig(fd, 0x0100, 9*2, true);  // MUI
     std::cout << "EUI:"<< std::endl;
     readConfig(fd, 0x010a, 8*2);  // EUI
+    readConfig(fd, 0x0116, 14, false, false, data);  // TSHR2...FVRC2X
+    std::cout << "TSHR2: " << std::dec << static_cast<unsigned>(((data[1]&0xff) << 8) | (data[0]&0xff)) << std::endl;
+    std::cout << "FVRA2X: " << static_cast<unsigned>(((data[7]&0xff) << 8) | (data[6]&0xff)) << std::endl;
+    std::cout << "FVRC2X: " << static_cast<unsigned>(((data[13]&0xff) << 8) | (data[12]&0xff)) << std::endl;
   }
   if (verbose) {
     std::cout << "Flash:" << std::endl;
@@ -957,7 +1039,7 @@ int main(int argc, char* argv[]) {
   } else {
     std::cout << "Firmware version not found" << std::endl;
   }
-  readIpSettings(fd);
+  readSettings(fd);
   std::cout << std::endl;
   bool success = true;
   if (flashFile) {
@@ -966,10 +1048,10 @@ int main(int argc, char* argv[]) {
       success = false;
     }
   }
-  if (setIp || setDhcp) {
-    if (writeIpSettings(fd)) {
-      std::cout << "IP settings changed to:" << std::endl;
-      readIpSettings(fd);
+  if (setIp || setDhcp || setArbitrationDelay) {
+    if (writeSettings(fd)) {
+      std::cout << "Settings changed to:" << std::endl;
+      readSettings(fd);
     } else {
       success = false;
     }

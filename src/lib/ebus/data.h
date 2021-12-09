@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -122,11 +122,11 @@ class AttributedItem {
   /**
    * Dump the attribute optionally embedded in @a TEXT_SEPARATOR to the output.
    * @param prependFieldSeparator whether to start with a @a FIELD_SEPARATOR.
-   * @param asJson whether to output in JSON format.
+   * @param outputFormat the @a OutputFormat options.
    * @param name the name of the attribute to dump.
    * @param output the @a ostream to dump to.
    */
-  void dumpAttribute(bool prependFieldSeparator, bool asJson, const string& name, ostream* output) const;
+  void dumpAttribute(bool prependFieldSeparator, OutputFormat outputFormat, const string& name, ostream* output) const;
 
   /**
    * Append the attribute value to the output.
@@ -271,12 +271,19 @@ class DataField : public AttributedItem {
   virtual string getName(ssize_t fieldIndex) const = 0;
 
   /**
+   * Get the specified field.
+   * @param fieldIndex the index of the field (excluding ignored fields).
+   * @return the field, or @a nullptr if not available.
+   */
+  virtual const SingleDataField* getField(ssize_t fieldIndex) const = 0;
+
+  /**
    * Dump the field settings to the output.
    * @param prependFieldSeparator whether to start with a @a FIELD_SEPARATOR.
-   * @param asJson whether to output in JSON format.
+   * @param outputFormat the @a OutputFormat options.
    * @param output the @a ostream to dump to.
    */
-  virtual void dump(bool prependFieldSeparator, bool asJson, ostream* output) const = 0;
+  virtual void dump(bool prependFieldSeparator, OutputFormat outputFormat, ostream* output) const = 0;
 
   /**
    * Return whether the field is available.
@@ -417,23 +424,37 @@ class SingleDataField : public DataField {
     return isIgnored() || fieldIndex > 0 ? "" : m_name;
   }
 
+  // @copydoc
+  virtual const SingleDataField* getField(ssize_t fieldIndex) const {
+    if (isIgnored() || fieldIndex > 0) {
+      return nullptr;
+    }
+    return const_cast<SingleDataField*>(this);
+  }
+
+  /**
+   * Return the data type definition.
+   * @return the data type definition.
+   */
+  const DataType* getDataType() const { return m_dataType; }
+
   /**
    * Dump the common prefix field settings to the output (name and part type).
    * @param prependFieldSeparator whether to start with a @a FIELD_SEPARATOR.
-   * @param asJson whether to output in JSON format.
+   * @param outputFormat the @a OutputFormat options.
    * @param output the @a ostream to dump to.
    */
-  void dumpPrefix(bool prependFieldSeparator, bool asJson, ostream* output) const;
+  void dumpPrefix(bool prependFieldSeparator, OutputFormat outputFormat, ostream* output) const;
 
   /**
    * Dump the common suffix field settings to the output (optional unit and comment).
-   * @param asJson whether to output in JSON format.
+   * @param outputFormat the @a OutputFormat options.
    * @param output the @a ostream to dump to.
    */
-  void dumpSuffix(bool asJson, ostream* output) const;
+  void dumpSuffix(OutputFormat outputFormat, ostream* output) const;
 
   // @copydoc
-  void dump(bool prependFieldSeparator, bool asJson, ostream* output) const override;
+  void dump(bool prependFieldSeparator, OutputFormat outputFormat, ostream* output) const override;
 
   // @copydoc
   bool hasField(const char* fieldName, bool numeric) const override;
@@ -519,7 +540,7 @@ class ValueListDataField : public SingleDataField {
       vector<const SingleDataField*>* fields) const override;
 
   // @copydoc
-  void dump(bool prependFieldSeparator, bool asJson, ostream* output) const override;
+  void dump(bool prependFieldSeparator, OutputFormat outputFormat, ostream* output) const override;
 
 
  protected:
@@ -572,7 +593,7 @@ class ConstantDataField : public SingleDataField {
       vector<const SingleDataField*>* fields) const override;
 
   // @copydoc
-  void dump(bool prependFieldSeparator, bool asJson, ostream* output) const override;
+  void dump(bool prependFieldSeparator, OutputFormat outputFormat, ostream* output) const override;
 
 
  protected:
@@ -659,6 +680,9 @@ class DataFieldSet : public DataField {
   string getName(ssize_t fieldIndex) const override;
 
   // @copydoc
+  const SingleDataField* getField(ssize_t fieldIndex) const override;
+
+  // @copydoc
   result_t derive(const string& name, PartType partType, int divisor,
       const map<unsigned int, string>& values, map<string, string>* attributes,
       vector<const SingleDataField*>* fields) const override;
@@ -685,7 +709,7 @@ class DataFieldSet : public DataField {
   bool hasField(const char* fieldName, bool numeric) const override;
 
   // @copydoc
-  void dump(bool prependFieldSeparator, bool asJson, ostream* output) const override;
+  void dump(bool prependFieldSeparator, OutputFormat outputFormat, ostream* output) const override;
 
   // @copydoc
   result_t read(const SymbolString& data, size_t offset,

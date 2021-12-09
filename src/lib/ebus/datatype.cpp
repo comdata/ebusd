@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -42,10 +42,15 @@ using std::setw;
 using std::endl;
 
 
-bool DataType::dump(bool asJson, size_t length, bool appendDivisor, ostream* output) const {
-  if (asJson) {
-    *output << "\"type\": \"" << m_id << "\"" << FIELD_SEPARATOR << " \"isbits\": "
-            << (getBitCount() < 8 ? "true" : "false") << FIELD_SEPARATOR << " \"length\": ";
+bool DataType::dump(OutputFormat outputFormat, size_t length, bool appendDivisor, ostream* output) const {
+  if (outputFormat & OF_JSON) {
+    *output << "\"type\": \"" << m_id << "\", \"isbits\": "
+            << (getBitCount() < 8 ? "true" : "false");
+    if (outputFormat & OF_ALL_ATTRS) {
+      *output << ", \"isadjustable\": " << (isAdjustableLength() ? "true" : "false");
+      *output << ", \"isignored\": " << (isIgnored() ? "true" : "false");
+    }
+    *output << ", \"length\": ";
     if (isAdjustableLength() && length == REMAIN_LEN) {
       *output << "-1";
     } else {
@@ -54,10 +59,11 @@ bool DataType::dump(bool asJson, size_t length, bool appendDivisor, ostream* out
   } else {
     *output << m_id;
     if (isAdjustableLength()) {
+      *output << LENGTH_SEPARATOR;
       if (length == REMAIN_LEN) {
-        *output << ":*";
+        *output << "*";
       } else {
-        *output << ":" << static_cast<unsigned>(length);
+        *output << static_cast<unsigned>(length);
       }
     }
     if (appendDivisor) {
@@ -68,13 +74,20 @@ bool DataType::dump(bool asJson, size_t length, bool appendDivisor, ostream* out
 }
 
 
-result_t StringDataType::readRawValue(size_t offset, size_t length, const SymbolString& input,
-    unsigned int* value) const {
+bool StringDataType::dump(OutputFormat outputFormat, size_t length, bool appendDivisor, ostream* output) const {
+  DataType::dump(outputFormat, length, appendDivisor, output);
+  if ((outputFormat & OF_JSON) && (outputFormat & OF_ALL_ATTRS)) {
+    *output << ", \"result\": \"" << (isIgnored() ? "void" : "string") << "\"";
+  }
+  return false;
+}
+
+result_t StringDataType::readRawValue(size_t, size_t, const SymbolString&, unsigned int*) const {
   return RESULT_EMPTY;
 }
 
 result_t StringDataType::readSymbols(size_t offset, size_t length, const SymbolString& input,
-    OutputFormat outputFormat, ostream* output) const {
+                                     OutputFormat outputFormat, ostream* output) const {
   size_t start = 0, count = length;
   int incr = 1;
   symbol_t symbol;
@@ -124,7 +137,7 @@ result_t StringDataType::readSymbols(size_t offset, size_t length, const SymbolS
 }
 
 result_t StringDataType::writeSymbols(size_t offset, size_t length, istringstream* input,
-    SymbolString* output, size_t* usedLength) const {
+                                      SymbolString* output, size_t* usedLength) const {
   size_t start = 0, count = length;
   bool remainder = count == REMAIN_LEN && hasFlag(ADJ);
   int incr = 1;
@@ -204,16 +217,24 @@ result_t StringDataType::writeSymbols(size_t offset, size_t length, istringstrea
 }
 
 
-result_t DateTimeDataType::readRawValue(size_t offset, size_t length, const SymbolString& input,
-    unsigned int* value) const {
+bool DateTimeDataType::dump(OutputFormat outputFormat, size_t length, bool appendDivisor, ostream* output) const {
+  DataType::dump(outputFormat, length, appendDivisor, output);
+  if ((outputFormat & OF_JSON) && (outputFormat & OF_ALL_ATTRS)) {
+    *output << ", \"result\": \"" << (hasDate() ? hasTime() ? "datetime" : "date" : "time") << "\"";
+  }
+  return false;
+}
+
+result_t DateTimeDataType::readRawValue(size_t, size_t, const SymbolString&, unsigned int*) const {
   return RESULT_EMPTY;
 }
 
 result_t DateTimeDataType::readSymbols(size_t offset, size_t length, const SymbolString& input,
-    OutputFormat outputFormat, ostream* output) const {
+                                       OutputFormat outputFormat, ostream* output) const {
   size_t start = 0, count = length;
   int incr = 1;
   symbol_t symbol, last = 0, hour = 0;
+  unsigned long minutes = 0;
   if (count == REMAIN_LEN && input.getDataSize() > offset) {
     count = input.getDataSize() - offset;
   } else if (offset + count > input.getDataSize()) {
@@ -229,7 +250,7 @@ result_t DateTimeDataType::readSymbols(size_t offset, size_t length, const Symbo
   }
   int type = (m_hasDate?2:0) | (m_hasTime?1:0);
   for (size_t index = start, i = 0; i < count; index += incr, i++) {
-    if (length == 4 && i == 2 && m_hasDate) {
+    if (length == 4 && i == 2 && m_hasDate && !m_hasTime) {
       continue;  // skip weekday in between
     }
     symbol = input.dataAt(offset + index);
@@ -240,24 +261,108 @@ result_t DateTimeDataType::readSymbols(size_t offset, size_t length, const Symbo
       symbol = (symbol_t)((symbol >> 4) * 10 + (symbol & 0x0f));
     }
     switch (type) {
-    case 2:  // date only
-      if (!hasFlag(REQ) && symbol == m_replacement) {
-        if (i + 1 != length) {
-          *output << NULL_VALUE << ".";
-          break;
-        } else if (last == m_replacement) {
-          if (length == 2) {  // number of days since 01.01.1900
+      case 2:  // date only
+        if (!hasFlag(REQ) && symbol == m_replacement) {
+          if (i + 1 != length) {
             *output << NULL_VALUE << ".";
+            break;
+          } else if (last == m_replacement) {
+            if (length == 2) {  // number of days since 01.01.1900
+              *output << NULL_VALUE << ".";
+            }
+            *output << NULL_VALUE;
+            break;
+          }
+        }
+        if (length == 2) {  // number of days since 01.01.1900
+          if (i == 0) {
+            break;
+          }
+          int mjd = last + symbol*256 + 15020;  // 01.01.1900
+          int y = static_cast<int>((mjd-15078.2)/365.25);
+          int m = static_cast<int>((mjd-14956.1-static_cast<int>(y*365.25))/30.6001);
+          int d = mjd-14956-static_cast<int>(y*365.25)-static_cast<int>(m*30.6001);
+          m--;
+          if (m >= 13) {
+            y++;
+            m -= 12;
+          }
+          *output << dec << setfill('0') << setw(2) << static_cast<unsigned>(d) << "."
+                  << setw(2) << static_cast<unsigned>(m) << "." << static_cast<unsigned>(y + 1900);
+          break;
+        }
+        if (i + 1 == length) {
+          *output << (2000 + symbol);
+        } else if (symbol < 1 || (i == 0 && symbol > 31) || (i == 1 && symbol > 12)) {
+          return RESULT_ERR_OUT_OF_RANGE;  // invalid date
+        } else {
+          *output << setw(2) << dec << setfill('0') << static_cast<unsigned>(symbol) << ".";
+        }
+        break;
+
+      case 1:  // time only
+        if (!hasFlag(REQ) && symbol == m_replacement) {
+          if (length == 1) {  // truncated time
+            *output << NULL_VALUE << ":" << NULL_VALUE;
+            break;
+          }
+          if (i > 0) {
+            *output << ":";
           }
           *output << NULL_VALUE;
           break;
         }
-      }
-      if (length == 2) {  // number of days since 01.01.1900
+        if (hasFlag(SPE)) {  // minutes since midnight
+          if (i == 0) {
+            last = symbol;
+            continue;
+          }
+          minutes = symbol*256 + last;
+          if (minutes > 24*60) {
+            return RESULT_ERR_OUT_OF_RANGE;  // invalid value
+          }
+          unsigned int minutesHour = (unsigned int)(minutes / 60);
+          if (minutesHour > 24) {
+            return RESULT_ERR_OUT_OF_RANGE;  // invalid hour
+          }
+          *output << setw(2) << dec << setfill('0') << minutesHour;
+          symbol = (symbol_t)(minutes % 60);
+        } else if (length == 1) {  // truncated time
+          if (m_bitCount < 8) {
+            symbol = (symbol_t)(symbol & ((1 << m_bitCount) - 1));
+          }
+          if (i == 0) {
+            symbol = (symbol_t)(symbol/(60/m_resolution));  // convert to hours
+            index -= incr;  // repeat for minutes
+            count++;
+          } else {
+            symbol = (symbol_t)((symbol % (60/m_resolution)) * m_resolution);  // convert to minutes
+          }
+        }
         if (i == 0) {
+          if (symbol > 24) {
+            return RESULT_ERR_OUT_OF_RANGE;  // invalid hour
+          }
+          hour = symbol;
+        } else if (symbol > 59 || (hour == 24 && symbol > 0)) {
+          return RESULT_ERR_OUT_OF_RANGE;  // invalid time
+        }
+        if (i > 0) {
+          *output << ":";
+        }
+        *output << setw(2) << dec << setfill('0') << static_cast<unsigned>(symbol);
+        break;
+
+      case 3:  // date+time
+        if (length != 4) {
+          return RESULT_ERR_INVALID_POS;
+        }
+        // number of minutes since 01.01.2009
+        minutes |= symbol*(1<<(8*i));
+        if (i<3) {
           break;
         }
-        int mjd = last + symbol*256 + 15020;  // 01.01.1900
+        int mjd = static_cast<int>(minutes/(24*60)) + 54832;  // 01.01.2009
         int y = static_cast<int>((mjd-15078.2)/365.25);
         int m = static_cast<int>((mjd-14956.1-static_cast<int>(y*365.25))/30.6001);
         int d = mjd-14956-static_cast<int>(y*365.25)-static_cast<int>(m*30.6001);
@@ -268,69 +373,12 @@ result_t DateTimeDataType::readSymbols(size_t offset, size_t length, const Symbo
         }
         *output << dec << setfill('0') << setw(2) << static_cast<unsigned>(d) << "."
                 << setw(2) << static_cast<unsigned>(m) << "." << static_cast<unsigned>(y + 1900);
+        m = static_cast<int>(minutes%(24*60));
+        d = m/60;
+        *output << " " << setw(2) << dec << setfill('0') << static_cast<unsigned>(d);
+        m -= d*60;
+        *output << ":" << setw(2) << dec << setfill('0') << static_cast<unsigned>(m);
         break;
-      }
-      if (i + 1 == length) {
-        *output << (2000 + symbol);
-      } else if (symbol < 1 || (i == 0 && symbol > 31) || (i == 1 && symbol > 12)) {
-        return RESULT_ERR_OUT_OF_RANGE;  // invalid date
-      } else {
-        *output << setw(2) << dec << setfill('0') << static_cast<unsigned>(symbol) << ".";
-      }
-      break;
-
-    case 1:  // time only
-      if (!hasFlag(REQ) && symbol == m_replacement) {
-        if (length == 1) {  // truncated time
-          *output << NULL_VALUE << ":" << NULL_VALUE;
-          break;
-        }
-        if (i > 0) {
-          *output << ":";
-        }
-        *output << NULL_VALUE;
-        break;
-      }
-      if (hasFlag(SPE)) {  // minutes since midnight
-        if (i == 0) {
-          last = symbol;
-          continue;
-        }
-        unsigned int minutes = symbol*256 + last;
-        if (minutes > 24*60) {
-          return RESULT_ERR_OUT_OF_RANGE;  // invalid value
-        }
-        unsigned int minutesHour = minutes / 60;
-        if (minutesHour > 24) {
-          return RESULT_ERR_OUT_OF_RANGE;  // invalid hour
-        }
-        *output << setw(2) << dec << setfill('0') << minutesHour;
-        symbol = (symbol_t)(minutes % 60);
-      } else if (length == 1) {  // truncated time
-        if (m_bitCount < 8) {
-          symbol = (symbol_t)(symbol & ((1 << m_bitCount) - 1));
-        }
-        if (i == 0) {
-          symbol = (symbol_t)(symbol/(60/m_resolution));  // convert to hours
-          index -= incr;  // repeat for minutes
-          count++;
-        } else {
-          symbol = (symbol_t)((symbol % (60/m_resolution)) * m_resolution);  // convert to minutes
-        }
-      }
-      if (i == 0) {
-        if (symbol > 24) {
-          return RESULT_ERR_OUT_OF_RANGE;  // invalid hour
-        }
-        hour = symbol;
-      } else if (symbol > 59 || (hour == 24 && symbol > 0)) {
-        return RESULT_ERR_OUT_OF_RANGE;  // invalid time
-      }
-      if (i > 0) {
-        *output << ":";
-      }
-      *output << setw(2) << dec << setfill('0') << static_cast<unsigned>(symbol);
-      break;
     }
     last = symbol;
   }
@@ -341,7 +389,7 @@ result_t DateTimeDataType::readSymbols(size_t offset, size_t length, const Symbo
 }
 
 result_t DateTimeDataType::writeSymbols(size_t offset, size_t length, istringstream* input,
-    SymbolString* output, size_t* usedLength) const {
+                                        SymbolString* output, size_t* usedLength) const {
   size_t start = 0, count = length;
   bool remainder = count == REMAIN_LEN && hasFlag(ADJ);
   int incr = 1;
@@ -366,113 +414,141 @@ result_t DateTimeDataType::writeSymbols(size_t offset, size_t length, istringstr
   }
   result_t result;
   size_t i = 0, index;
-  int type = (m_hasDate?2:0) | (m_hasTime?1:0);
+  int type = m_hasDate ? 2 : (m_hasTime ? 1 : 0);
   bool skip = false;
   for (index = start; i < count; index += skip ? 0 : incr, i++) {
     skip = false;
     switch (type) {
-    case 2:  // date only
-      if (length == 4 && i == 2) {
-        continue;  // skip weekday in between
-      }
-      if (input->eof() || !getline(*input, token, '.')) {
-        return RESULT_ERR_EOF;  // incomplete
-      }
-      if (!hasFlag(REQ) && token == NULL_VALUE) {
-        value = m_replacement;
+      case 2:  // date only
+        if (length == 4 && i == 2 && !m_hasTime) {
+          continue;  // skip weekday in between
+        }
+        if (input->eof() || !getline(*input, token, m_hasTime && i==2 ? ' ' : '.')) {
+          return RESULT_ERR_EOF;  // incomplete
+        }
+        if (!hasFlag(REQ) && token == NULL_VALUE) {
+          value = m_replacement;
+          break;
+        }
+        value = parseInt(token.c_str(), 10, 0, 2099, &result);
+        if (result != RESULT_OK) {
+          return result;  // invalid date part
+        }
+        if (length == 2) {  // number of days since 01.01.1900
+          skip = true;
+          if (i == 0) {
+            count++;
+          } else if (i + 1 == count) {
+            int y = (value < 100 ? value + 2000 : value) - 1900;
+            int l = last <= 2 ? 1 : 0;
+            int mjd = 14956 + lastLast + static_cast<int>((y-l)*365.25) + static_cast<int>((last+1+l*12)*30.6001);
+            value = mjd - 15020;  // 01.01.1900
+            output->dataAt(offset + index) = (symbol_t)(value&0xff);
+            value >>=  8;
+            index += incr;
+            skip = false;
+            break;
+          }
+        }
+        if (i + 1 == (m_hasTime ? count-1 : count)) {
+          if (length == 4) {
+            int y = (value < 100 ? value + 2000 : value) - 1900;
+            int l = last <= 2 ? 1 : 0;
+            int mjd = 14956 + lastLast + static_cast<int>((y-l)*365.25) + static_cast<int>((last+1+l*12)*30.6001);
+            if (m_hasTime) {
+              if (mjd < 54832) {  // 01.01.2009
+                return RESULT_ERR_OUT_OF_RANGE;  // invalid date
+              }
+              last = mjd - 54832;
+              index = start + incr;
+              i = 1;
+              type = 1;
+              skip = true; // switch to second pass for parsing the time
+            } else {
+              // calculate local week day
+              int daysSinceSunday = (mjd + 3) % 7;  // Sun=0
+              if (hasFlag(SPE)) {
+                output->dataAt(offset + index - incr) = (symbol_t) ((6 + daysSinceSunday) % 7);  // Sun=0x06
+              } else {
+                // Sun=0x07
+                output->dataAt(offset + index - incr) = (symbol_t) (daysSinceSunday == 0 ? 7 : daysSinceSunday);
+              }
+            }
+          }
+          if (value >= 2000) {
+            value -= 2000;
+          }
+          if (value > 99) {
+            return RESULT_ERR_OUT_OF_RANGE;  // invalid year
+          }
+        } else if (value < 1 || (i == 0 && value > 31) || (i == 1 && value > 12)) {
+          return RESULT_ERR_OUT_OF_RANGE;  // invalid date part
+        }
         break;
-      }
-      value = parseInt(token.c_str(), 10, 0, 2099, &result);
-      if (result != RESULT_OK) {
-        return result;  // invalid date part
-      }
-      if (length == 2) {  // number of days since 01.01.1900
-        skip = true;
-        if (i == 0) {
-          count++;
-        } else if (i + 1 == count) {
-          int y = (value < 100 ? value + 2000 : value) - 1900;
-          int l = last <= 2 ? 1 : 0;
-          int mjd = 14956 + lastLast + static_cast<int>((y-l)*365.25) + static_cast<int>((last+1+l*12)*30.6001);
-          value = mjd - 15020;  // 01.01.1900
+
+      case 1:  // time only
+        if (input->eof() || !getline(*input, token, LENGTH_SEPARATOR)) {
+          return RESULT_ERR_EOF;  // incomplete
+        }
+        if (!hasFlag(REQ) && token == NULL_VALUE) {
+          value = m_replacement;
+          if (length == 1) {  // truncated time
+            if (i == 0) {
+              skip = true;  // repeat for minutes
+              count++;
+              break;
+            }
+            if (last != m_replacement) {
+              return RESULT_ERR_INVALID_NUM;  // invalid truncated time minutes
+            }
+          }
+          break;
+        }
+        value = parseInt(token.c_str(), 10, 0, 59, &result);
+        if (result != RESULT_OK) {
+          return result;  // invalid time part
+        }
+        if ((i == 0 && value > 24) || (i > 0 && (last == 24 && value > 0) )) {
+          return RESULT_ERR_OUT_OF_RANGE;  // invalid time part
+        }
+        if (hasFlag(SPE)) {  // minutes since midnight
+          if (i == 0) {
+            skip = true;  // repeat for minutes
+            break;
+          }
+          value += last*60;
           output->dataAt(offset + index) = (symbol_t)(value&0xff);
           value >>=  8;
           index += incr;
-          skip = false;
-          break;
-        }
-      }
-      if (i + 1 == count) {
-        if (length == 4) {
-          // calculate local week day
-          int y = (value < 100 ? value + 2000 : value) - 1900;
-          int l = last <= 2 ? 1 : 0;
-          int mjd = 14956 + lastLast + static_cast<int>((y-l)*365.25) + static_cast<int>((last+1+l*12)*30.6001);
-          int daysSinceSunday = (mjd+3) % 7;  // Sun=0
-          if (hasFlag(BCD)) {
-            output->dataAt(offset + index - incr) = (symbol_t)((6+daysSinceSunday) % 7);  // Sun=0x06
-          } else {
-            // Sun=0x07
-            output->dataAt(offset + index - incr) = (symbol_t)(daysSinceSunday == 0 ? 7 : daysSinceSunday);
-          }
-        }
-        if (value >= 2000) {
-          value -= 2000;
-        }
-        if (value > 99) {
-          return RESULT_ERR_OUT_OF_RANGE;  // invalid year
-        }
-      } else if (value < 1 || (i == 0 && value > 31) || (i == 1 && value > 12)) {
-        return RESULT_ERR_OUT_OF_RANGE;  // invalid date part
-      }
-      break;
-
-    case 1:  // time only
-      if (input->eof() || !getline(*input, token, LENGTH_SEPARATOR)) {
-        return RESULT_ERR_EOF;  // incomplete
-      }
-      if (!hasFlag(REQ) && token == NULL_VALUE) {
-        value = m_replacement;
-        if (length == 1) {  // truncated time
+        } else if (length == 1) {  // truncated time
           if (i == 0) {
             skip = true;  // repeat for minutes
             count++;
             break;
           }
-          if (last != m_replacement) {
-            return RESULT_ERR_INVALID_NUM;  // invalid truncated time minutes
+          value = (last * 60 + value + m_resolution/2)/m_resolution;
+          if (value > 24 * 6) {
+            return RESULT_ERR_OUT_OF_RANGE;  // invalid time
+          }
+        } else if (m_hasDate) {
+          if (i + 1 == count) {
+            last = (lastLast * 24 + last) * 60 + value;
+            value = last & 0xff;
+            last >>= 8;
+            index = start;
+            i = 0;
+            type = 3;
+          } else {
+            last = lastLast;
+            skip = true;
           }
         }
         break;
-      }
-      value = parseInt(token.c_str(), 10, 0, 59, &result);
-      if (result != RESULT_OK) {
-        return result;  // invalid time part
-      }
-      if ((i == 0 && value > 24) || (i > 0 && (last == 24 && value > 0) )) {
-        return RESULT_ERR_OUT_OF_RANGE;  // invalid time part
-      }
-      if (hasFlag(SPE)) {  // minutes since midnight
-        if (i == 0) {
-          skip = true;  // repeat for minutes
-          break;
-        }
-        value += last*60;
-        output->dataAt(offset + index) = (symbol_t)(value&0xff);
-        value >>=  8;
-        index += incr;
-      } else if (length == 1) {  // truncated time
-        if (i == 0) {
-          skip = true;  // repeat for minutes
-          count++;
-          break;
-        }
-        value = (last * 60 + value + m_resolution/2)/m_resolution;
-        if (value > 24 * 6) {
-          return RESULT_ERR_OUT_OF_RANGE;  // invalid time
-        }
-      }
-      break;
+
+      case 3: // date and time in store phase
+        value = lastLast & 0xff;
+        last = lastLast >> 8;
+        break;
     }
     lastLast = last;
     last = value;
@@ -512,31 +588,38 @@ size_t NumberDataType::calcPrecision(int divisor) {
   return precision;
 }
 
-bool NumberDataType::dump(bool asJson, size_t length, bool appendDivisor, ostream* output) const {
+bool NumberDataType::dump(OutputFormat outputFormat, size_t length, bool appendDivisor, ostream* output) const {
   if (m_bitCount < 8) {
-    DataType::dump(asJson, m_bitCount, appendDivisor, output);
+    DataType::dump(outputFormat, m_bitCount, appendDivisor, output);
   } else {
-    DataType::dump(asJson, length, appendDivisor, output);
+    DataType::dump(outputFormat, length, appendDivisor, output);
+  }
+  if ((outputFormat & OF_JSON) && (outputFormat & OF_ALL_ATTRS)) {
+    *output << ", \"result\": \"number\"";
   }
   if (!appendDivisor) {
     return false;
   }
+  bool ret = false;
   if (m_baseType) {
     if (m_baseType->m_divisor != m_divisor) {
-      if (asJson) {
+      if (outputFormat & OF_JSON) {
         *output << ", \"divisor\": ";
       }
       *output << (m_divisor / m_baseType->m_divisor);
-      return true;
+      ret = true;
     }
   } else if (m_divisor != 1) {
-    if (asJson) {
+    if (outputFormat & OF_JSON) {
       *output << ", \"divisor\": ";
     }
     *output << m_divisor;
-    return true;
+    ret = true;
   }
-  return false;
+  if (ret && (outputFormat & OF_JSON) && (outputFormat & OF_ALL_ATTRS)) {
+    *output << ", \"precision\": " << static_cast<unsigned>(getPrecision());
+  }
+  return ret;
 }
 
 result_t NumberDataType::derive(int divisor, size_t bitCount, const NumberDataType** derived) const {
@@ -582,17 +665,17 @@ result_t NumberDataType::derive(int divisor, size_t bitCount, const NumberDataTy
   }
   if (m_bitCount < 8) {
     *derived = new NumberDataType(m_id, bitCount, m_flags, m_replacement,
-      m_firstBit, divisor, m_baseType ? m_baseType : this);
+                                  m_firstBit, divisor, m_baseType ? m_baseType : this);
   } else {
     *derived = new NumberDataType(m_id, bitCount, m_flags, m_replacement,
-      m_minValue, m_maxValue, divisor, m_baseType ? m_baseType : this);
+                                  m_minValue, m_maxValue, divisor, m_baseType ? m_baseType : this);
   }
   DataTypeList::getInstance()->addCleanup(*derived);
   return RESULT_OK;
 }
 
 result_t NumberDataType::readRawValue(size_t offset, size_t length, const SymbolString& input,
-    unsigned int* value) const {
+                                      unsigned int* value) const {
   size_t start = 0, count = length;
   int incr = 1;
   symbol_t symbol;
@@ -640,7 +723,7 @@ result_t NumberDataType::readRawValue(size_t offset, size_t length, const Symbol
 }
 
 result_t NumberDataType::readSymbols(size_t offset, size_t length, const SymbolString& input,
-    OutputFormat outputFormat, ostream* output) const {
+                                     OutputFormat outputFormat, ostream* output) const {
   unsigned int value = 0;
   int signedValue;
 
@@ -738,7 +821,7 @@ result_t NumberDataType::readSymbols(size_t offset, size_t length, const SymbolS
   }
   if (m_divisor < 0) {
     *output << fixed << setprecision(0)
-        << (static_cast<float>(signedValue) * static_cast<float>(-m_divisor));
+            << (static_cast<float>(signedValue) * static_cast<float>(-m_divisor));
   } else if (m_divisor <= 1) {
     if (hasFlag(FIX) && hasFlag(BCD)) {
       if (outputFormat & OF_JSON) {
@@ -757,7 +840,7 @@ result_t NumberDataType::readSymbols(size_t offset, size_t length, const SymbolS
 }
 
 result_t NumberDataType::writeRawValue(unsigned int value, size_t offset, size_t length,
-    SymbolString* output, size_t* usedLength) const {
+                                       SymbolString* output, size_t* usedLength) const {
   size_t start = 0, count = length;
   int incr = 1;
   symbol_t symbol;
@@ -802,7 +885,7 @@ result_t NumberDataType::writeRawValue(unsigned int value, size_t offset, size_t
 }
 
 result_t NumberDataType::writeSymbols(size_t offset, size_t length, istringstream* input,
-    SymbolString* output, size_t* usedLength) const {
+                                      SymbolString* output, size_t* usedLength) const {
   unsigned int value;
 
   const string inputStr = input->str();
@@ -929,17 +1012,24 @@ DataTypeList::DataTypeList() {
   // >= 1 byte hex digit string, usually separated by space, e.g. 0a 1b 2c 3d
   add(new StringDataType("HEX", MAX_LEN*8, ADJ, 0, true));
   // date with weekday in BCD, 01.01.2000 - 31.12.2099 (0x01,0x01,WW,0x00 - 0x31,0x12,WW,0x99,
-  // WW is weekday Mon=0x00 - Sun=0x06, replacement 0xff)
+  // WW is weekday Mon=0x01 - Sun=0x07, replacement 0xff)
   add(new DateTimeDataType("BDA", 32, BCD, 0xff, true, false, 0));
+  add(new DateTimeDataType("BDA:4", 32, BCD|DUP, 0xff, true, false, 0));
   // date in BCD, 01.01.2000 - 31.12.2099 (0x01,0x01,0x00 - 0x31,0x12,0x99, replacement 0xff)
-  add(new DateTimeDataType("BDA", 24, BCD, 0xff, true, false, 0));
+  add(new DateTimeDataType("BDA:3", 24, BCD, 0xff, true, false, 0));
+  // date with zero-based weekday in BCD, 01.01.2000 - 31.12.2099 (0x01,0x01,WZ,0x00 - 0x31,0x12,WZ,0x99,
+  // WZ is zero-based weekday Mon=0x00 - Sun=0x06, replacement 0xff)
+  add(new DateTimeDataType("BDZ", 32, BCD|SPE, 0xff, true, false, 0));
   // date with weekday, 01.01.2000 - 31.12.2099 (0x01,0x01,WW,0x00 - 0x1f,0x0c,WW,0x63,
   // WW is weekday Mon=0x01 - Sun=0x07, replacement 0xff)
   add(new DateTimeDataType("HDA", 32, 0, 0xff, true, false, 0));
+  add(new DateTimeDataType("HDA:4", 32, DUP, 0xff, true, false, 0));
   // date, 01.01.2000 - 31.12.2099 (0x01,0x01,0x00 - 0x1f,0x0c,0x63, replacement 0xff)
-  add(new DateTimeDataType("HDA", 24, 0, 0xff, true, false, 0));
+  add(new DateTimeDataType("HDA:3", 24, 0, 0xff, true, false, 0));
   // date, days since 01.01.1900, 01.01.1900 - 06.06.2079 (0x00,0x00 - 0xff,0xff)
   add(new DateTimeDataType("DAY", 16, 0, 0xff, true, false, 0));
+  // date+time in minutes since 01.01.2009, 01.01.2009 - 31.12.2099 (0x00,0x00,0x00,0x00 - 0x02,0xda,0x4e,0x1f)
+  add(new DateTimeDataType("DTM", 32, REQ, 0x100, true, true, 0));
   // time in BCD, 00:00:00 - 23:59:59 (0x00,0x00,0x00 - 0x59,0x59,0x23)
   add(new DateTimeDataType("BTI", 24, BCD|REV, 0xff, false, true, 0));
   // time, 00:00:00 - 23:59:59 (0x00,0x00,0x00 - 0x17,0x3b,0x3b)
@@ -963,13 +1053,15 @@ DataTypeList::DataTypeList() {
   add(new NumberDataType("BDY", 8, DAY, 0x07, 0, 6, 1));  // weekday, "Mon" - "Sun" (0x00 - 0x06) [eBUS type]
   add(new NumberDataType("HDY", 8, DAY, 0x00, 1, 7, 1));  // weekday, "Mon" - "Sun" (0x01 - 0x07) [Vaillant type]
   add(new NumberDataType("BCD", 8, BCD, 0xff, 0, 99, 1));  // unsigned decimal in BCD, 0 - 99
-  add(new NumberDataType("BCD", 16, BCD, 0xffff, 0, 9999, 1));  // unsigned decimal in BCD, 0 - 9999
-  add(new NumberDataType("BCD", 24, BCD, 0xffffff, 0, 999999, 1));  // unsigned decimal in BCD, 0 - 999999
-  add(new NumberDataType("BCD", 32, BCD, 0xffffffff, 0, 99999999, 1));  // unsigned decimal in BCD, 0 - 99999999
+  add(new NumberDataType("BCD:1", 8, BCD|DUP, 0xff, 0, 99, 1));  // unsigned decimal in BCD, 0 - 99
+  add(new NumberDataType("BCD:2", 16, BCD, 0xffff, 0, 9999, 1));  // unsigned decimal in BCD, 0 - 9999
+  add(new NumberDataType("BCD:3", 24, BCD, 0xffffff, 0, 999999, 1));  // unsigned decimal in BCD, 0 - 999999
+  add(new NumberDataType("BCD:4", 32, BCD, 0xffffffff, 0, 99999999, 1));  // unsigned decimal in BCD, 0 - 99999999
   add(new NumberDataType("HCD", 32, HCD|BCD|REQ, 0, 0, 99999999, 1));  // unsigned decimal in HCD, 0 - 99999999
-  add(new NumberDataType("HCD", 8, HCD|BCD|REQ, 0, 0, 99, 1));  // unsigned decimal in HCD, 0 - 99
-  add(new NumberDataType("HCD", 16, HCD|BCD|REQ, 0, 0, 9999, 1));  // unsigned decimal in HCD, 0 - 9999
-  add(new NumberDataType("HCD", 24, HCD|BCD|REQ, 0, 0, 999999, 1));  // unsigned decimal in HCD, 0 - 999999
+  add(new NumberDataType("HCD:4", 32, HCD|BCD|REQ|DUP, 0, 0, 99999999, 1));  // unsigned decimal in HCD, 0 - 99999999
+  add(new NumberDataType("HCD:1", 8, HCD|BCD|REQ, 0, 0, 99, 1));  // unsigned decimal in HCD, 0 - 99
+  add(new NumberDataType("HCD:2", 16, HCD|BCD|REQ, 0, 0, 9999, 1));  // unsigned decimal in HCD, 0 - 9999
+  add(new NumberDataType("HCD:3", 24, HCD|BCD|REQ, 0, 0, 999999, 1));  // unsigned decimal in HCD, 0 - 999999
   add(new NumberDataType("SCH", 8, SIG, 0x80, 0x81, 0x7f, 1));  // signed integer, -127 - +127
   add(new NumberDataType("D1B", 8, SIG, 0x80, 0x81, 0x7f, 1));  // signed integer, -127 - +127
   // unsigned number (fraction 1/2), 0 - 100 (0x00 - 0xc8, replacement 0xff)
@@ -1017,11 +1109,36 @@ DataTypeList::DataTypeList() {
   add(new NumberDataType("BI4", 4, ADJ|REQ, 0, 4, 1));  // bit 4 (up to 4 bits until bit 7)
   add(new NumberDataType("BI5", 3, ADJ|REQ, 0, 5, 1));  // bit 5 (up to 3 bits until bit 7)
   add(new NumberDataType("BI6", 2, ADJ|REQ, 0, 6, 1));  // bit 6 (up to 2 bits until bit 7)
-  add(new NumberDataType("BI7", 1, ADJ|REQ, 0, 7, 1));  // bit 7
+  add(new NumberDataType("BI7", 1, REQ, 0, 7, 1));  // bit 7
 }
 
 DataTypeList* DataTypeList::getInstance() {
   return &s_instance;
+}
+
+void DataTypeList::dump(OutputFormat outputFormat, bool appendDivisor, ostream* output) const {
+  bool json = outputFormat & OF_JSON;
+  string sep = "\n";
+  for (const auto &it: m_typesById) {
+    const DataType *dataType = it.second;
+    if (dataType->hasFlag(DUP)) {
+      continue;
+    }
+    if (json) {
+      *output << sep << "  {";
+    }
+    if ((dataType->getBitCount() % 8) != 0) {
+      dataType->dump(outputFormat, dataType->getBitCount(), appendDivisor, output);
+    } else {
+      dataType->dump(outputFormat, dataType->getBitCount() / 8, appendDivisor, output);
+    }
+    if (json) {
+      *output << "}";
+      sep = ",\n";
+    } else {
+      *output << "\n";
+    }
+  }
 }
 
 void DataTypeList::clear() {
@@ -1029,24 +1146,11 @@ void DataTypeList::clear() {
     delete it;
   }
   m_cleanupTypes.clear();
-  m_typesByIdLength.clear();
   m_typesById.clear();
 }
 
 result_t DataTypeList::add(const DataType* dataType) {
-  if (!dataType->isAdjustableLength()) {
-    ostringstream str;
-    size_t bitCount = dataType->getBitCount();
-    str << dataType->getId() << LENGTH_SEPARATOR << static_cast<unsigned>(bitCount >= 8?bitCount/8:bitCount);
-    if (m_typesByIdLength.find(str.str()) != m_typesByIdLength.end()) {
-      return RESULT_ERR_DUPLICATE_NAME;  // duplicate key
-    }
-    m_typesByIdLength[str.str()] = dataType;
-    if (m_typesById.find(dataType->getId()) != m_typesById.end()) {
-      m_cleanupTypes.push_back(dataType);
-      return RESULT_OK;  // only store first one as default
-    }
-  } else if (m_typesById.find(dataType->getId()) != m_typesById.end()) {
+  if (m_typesById.find(dataType->getId()) != m_typesById.end()) {
     return RESULT_ERR_DUPLICATE_NAME;  // duplicate key
   }
   m_typesById[dataType->getId()] = dataType;
@@ -1058,8 +1162,8 @@ const DataType* DataTypeList::get(const string& id, size_t length) const {
   if (length > 0) {
     ostringstream str;
     str << id << LENGTH_SEPARATOR << static_cast<unsigned>(length);
-    auto it = m_typesByIdLength.find(str.str());
-    if (it != m_typesByIdLength.end()) {
+    auto it = m_typesById.find(str.str());
+    if (it != m_typesById.end()) {
       return it->second;
     }
   }

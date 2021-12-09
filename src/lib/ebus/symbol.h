@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -67,6 +67,7 @@ namespace ebusd {
 
 using std::string;
 using std::vector;
+using std::ostringstream;
 
 /** the base type for symbols sent to/from the eBUS. */
 typedef unsigned char symbol_t;
@@ -107,10 +108,11 @@ unsigned int parseInt(const char* str, int base, unsigned int minValue, unsigned
  * @param maxValue the maximum resulting value.
  * @param result the variable in which to store an error code when parsing failed or the value is out of bounds.
  * @param length the optional variable in which to store the number of read characters.
+ * @param allowIncomplete true to allow parsing less than the complete string.
  * @return the parsed value.
  */
 int parseSignedInt(const char* str, int base, int minValue, int maxValue,
-    result_t* result, size_t* length = nullptr);
+    result_t* result, size_t* length = nullptr, bool allowIncomplete = false);
 
 /**
  * A string of unescaped bus symbols.
@@ -157,6 +159,14 @@ class SymbolString {
    * @return the symbols as hex string.
    */
   const string getStr(size_t skipFirstSymbols = 0) const;
+
+  /**
+   * Dump the data in JSON format to the output.
+   * @param withSeparator true to prepend the field separator.
+   * @param output the @a ostringstream to format the messages to.
+   * @return true if something was written to the output.
+   */
+  bool dumpJson(bool withSeparator, ostringstream* output) const;
 
   /**
    * Return a reference to the symbol at the specified index.
@@ -334,7 +344,7 @@ class SymbolString {
   void clear() { m_data.clear(); }
 
 
- private:
+ protected:
   /**
    * Hidden copy constructor.
    * @param str the @a SymbolString to copy from.
@@ -359,6 +369,25 @@ class MasterSymbolString : public SymbolString {
    * Creates a new empty instance.
    */
   MasterSymbolString() : SymbolString(true) {}
+
+  MasterSymbolString& operator=(const MasterSymbolString& other) {
+    this->m_data = other.m_data;
+    this->m_isMaster = true;
+    return *this;
+  }
+
+  MasterSymbolString& operator=(const MasterSymbolString* other) {
+    this->m_data = other->m_data;
+    this->m_isMaster = true;
+    return *this;
+  }
+
+ private:
+  /**
+   * Copy constructor.
+   * @param str the @a MasterSymbolString to copy from.
+   */
+  MasterSymbolString(const MasterSymbolString& str) : SymbolString(str) {}
 };
 
 
@@ -371,6 +400,25 @@ class SlaveSymbolString : public SymbolString {
    * Creates a new empty instance.
    */
   SlaveSymbolString() : SymbolString(false) {}
+
+  SlaveSymbolString& operator=(const SlaveSymbolString& other) {
+    this->m_data = other.m_data;
+    this->m_isMaster = false;
+    return *this;
+  }
+
+  SlaveSymbolString& operator=(const SlaveSymbolString* other) {
+    this->m_data = other->m_data;
+    this->m_isMaster = false;
+    return *this;
+  }
+
+ private:
+  /**
+   * Copy constructor.
+   * @param str the @a SlaveSymbolString to copy from.
+   */
+  SlaveSymbolString(const SlaveSymbolString& str) : SymbolString(str) {}
 };
 
 

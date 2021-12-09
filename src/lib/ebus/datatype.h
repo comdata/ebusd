@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -78,36 +78,61 @@ using std::ostringstream;
 /** the maximum value for value lists. */
 #define MAX_VALUE (0xFFFFFFFFu)
 
+typedef unsigned int OutputFormatBaseType;
 
-/** the type for data output format options. */
-typedef int OutputFormat;
+enum OutputFormat : OutputFormatBaseType {
+  /** no bit set at all. */
+  OF_NONE = 0,
 
-/** bit flag for @a OutputFormat: include names. */
-#define OF_NAMES 0x01
+  /** bit flag for @a OutputFormat: include names. */
+  OF_NAMES = 1 << 0,
 
-/** bit flag for @a OutputFormat: include units. */
-#define OF_UNITS 0x02
+  /** bit flag for @a OutputFormat: include units. */
+  OF_UNITS = 1 << 1,
 
-/** bit flag for @a OutputFormat: include comments. */
-#define OF_COMMENTS 0x04
+  /** bit flag for @a OutputFormat: include comments. */
+  OF_COMMENTS = 1 << 2,
 
-/** bit flag for @a OutputFormat: numeric format (keep numeric value of value=name pairs). */
-#define OF_NUMERIC 0x08
+  /** bit flag for @a OutputFormat: numeric format (keep numeric value of value=name pairs). */
+  OF_NUMERIC = 1 << 3,
 
-/** bit flag for @a OutputFormat: value=name format for such pairs. */
-#define OF_VALUENAME 0x10
+  /** bit flag for @a OutputFormat: value=name format for such pairs. */
+  OF_VALUENAME = 1 << 4,
 
-/** bit flag for @a OutputFormat: JSON format. */
-#define OF_JSON 0x20
+  /** bit flag for @a OutputFormat: JSON format. */
+  OF_JSON = 1 << 5,
 
-/** bit flag for @a OutputFormat: short format (only name and value, no indentation). */
-#define OF_SHORT 0x40
+  /** bit flag for @a OutputFormat: short format (only name and value for fields). */
+  OF_SHORT = 1 << 6,
 
-/** bit flag for @a OutputFormat: include all attributes. */
-#define OF_ALL_ATTRS 0x80
+  /** bit flag for @a OutputFormat: include all attributes. */
+  OF_ALL_ATTRS = 1 << 7,
 
-/** bit flag for @a OutputFormat: include message/field definition. */
-#define OF_DEFINTION 0x100
+  /** bit flag for @a OutputFormat: include message/field definition. */
+  OF_DEFINITION = 1 << 8,
+};
+
+constexpr inline enum OutputFormat operator| (enum OutputFormat self, enum OutputFormat other) {
+  return (enum OutputFormat)((OutputFormatBaseType)self | (OutputFormatBaseType)other);
+}
+
+inline enum OutputFormat& operator|= (enum OutputFormat& self, enum OutputFormat other) {
+  self = self | other;
+  return self;
+}
+
+constexpr inline enum OutputFormat operator& (enum OutputFormat self, enum OutputFormat other) {
+  return (enum OutputFormat)((OutputFormatBaseType)self & (OutputFormatBaseType)other);
+}
+
+inline enum OutputFormat& operator&= (enum OutputFormat& self, enum OutputFormat other) {
+  self = self & other;
+  return self;
+}
+
+constexpr inline enum OutputFormat operator~ (enum OutputFormat self) {
+  return (enum OutputFormat)(~(OutputFormatBaseType)self);
+}
 
 /** the message part in which a data field is stored. */
 enum PartType {
@@ -153,9 +178,8 @@ enum PartType {
 /** bit flag for @a DataType: special marker for certain types. */
 #define SPE 0x800
 
-/** bit flag for @a DataType: marker for a constant value. */
-#define CON 0x1000
-
+/** bit flag for @a DataType: stored duplicate for backwards compatibility, not to be traversed in lists any more. */
+#define DUP 0x1000
 
 /**
  * Base class for all kinds of data types.
@@ -219,13 +243,13 @@ class DataType {
   /**
    * Dump the type identifier with the specified length and optionally the
    * divisor to the output.
-   * @param asJson whether to output in JSON format.
+   * @param outputFormat the @a OutputFormat options.
    * @param length the number of symbols to read/write.
    * @param appendDivisor whether to append the divisor (if available).
    * @param output the @a ostream to dump to.
    * @return true when a non-default divisor was written to the output.
    */
-  virtual bool dump(bool asJson, size_t length, bool appendDivisor, ostream* output) const;
+  virtual bool dump(OutputFormat outputFormat, size_t length, bool appendDivisor, ostream* output) const;
 
   /**
    * Internal method for reading the numeric raw value from a @a SymbolString.
@@ -302,6 +326,9 @@ class StringDataType : public DataType {
   virtual ~StringDataType() {}
 
   // @copydoc
+  bool dump(OutputFormat outputFormat, size_t length, bool appendDivisor, ostream* output) const override;
+
+  // @copydoc
   result_t readRawValue(size_t offset, size_t length, const SymbolString& input,
       unsigned int* value) const override;
 
@@ -344,6 +371,9 @@ class DateTimeDataType : public DataType {
    * Destructor.
    */
   virtual ~DateTimeDataType() {}
+
+  // @copydoc
+  bool dump(OutputFormat outputFormat, size_t length, bool appendDivisor, ostream* output) const override;
 
   /**
    * @return true if date part is present.
@@ -404,7 +434,7 @@ class NumberDataType : public DataType {
   NumberDataType(const string& id, size_t bitCount, uint16_t flags, unsigned int replacement,
       unsigned int minValue, unsigned int maxValue, int divisor,
       const NumberDataType* baseType = nullptr)
-    : DataType(id, bitCount, flags|NUM, replacement), m_minValue(minValue), m_maxValue(maxValue), m_divisor(divisor),
+    : DataType(id, bitCount, flags|NUM, replacement), m_minValue(minValue), m_maxValue(maxValue), m_divisor(divisor==0 ? 1 : divisor),
       m_precision(calcPrecision(divisor)), m_firstBit(0), m_baseType(baseType) {}
 
   /**
@@ -419,7 +449,7 @@ class NumberDataType : public DataType {
    */
   NumberDataType(const string& id, size_t bitCount, uint16_t flags, unsigned int replacement,
       int16_t firstBit, int divisor, const NumberDataType* baseType = nullptr)
-    : DataType(id, bitCount, flags|NUM, replacement), m_minValue(0), m_maxValue((1 << bitCount)-1), m_divisor(divisor),
+    : DataType(id, bitCount, flags|NUM, replacement), m_minValue(0), m_maxValue((1 << bitCount)-1), m_divisor(divisor==0 ? 1 : divisor),
       m_precision(0), m_firstBit(firstBit), m_baseType(baseType) {}
 
   /**
@@ -436,7 +466,7 @@ class NumberDataType : public DataType {
   static size_t calcPrecision(int divisor);
 
   // @copydoc
-  bool dump(bool asJson, size_t length, bool appendDivisor, ostream* output) const override;
+  bool dump(OutputFormat outputFormat, size_t length, bool appendDivisor, ostream* output) const override;
 
   /**
    * Derive a new @a NumberDataType from this.
@@ -546,6 +576,14 @@ class DataTypeList {
   static DataTypeList* getInstance();
 
   /**
+   * Dump the type list optionally including the divisor to the output.
+   * @param outputFormat the @a OutputFormat options.
+   * @param appendDivisor whether to append the divisor (if available).
+   * @param output the @a ostream to dump to.
+   */
+  void dump(OutputFormat outputFormat, bool appendDivisor, ostream* output) const;
+
+  /**
    * Removes all @a DataType instances.
    */
   void clear();
@@ -586,12 +624,9 @@ class DataTypeList {
   map<string, const DataType*>::const_iterator end() const { return m_typesById.end(); }
 
  private:
-  /** the known @a DataType instances by ID only. */
-  map<string, const DataType*> m_typesById;
-
-  /** the known @a DataType instances by ID and length (i.e. "ID:BITS").
+  /** the known @a DataType instances by ID (e.g. "ID:BITS" or just "ID").
    * Note: adjustable length types are stored by ID only. */
-  map<string, const DataType*> m_typesByIdLength;
+  map<string, const DataType*> m_typesById;
 
   /** the @a DataType instances to cleanup. */
   list<const DataType*> m_cleanupTypes;

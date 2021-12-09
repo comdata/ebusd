@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -122,7 +122,11 @@ class Message : public AttributedItem {
   /**
    * Destructor.
    */
-  virtual ~Message() { if (m_deleteData) { delete m_data; } }
+  virtual ~Message() {
+    if (m_deleteData) {
+      delete m_data;
+    }
+  }
 
   /**
    * Calculate the key for the ID.
@@ -280,6 +284,13 @@ class Message : public AttributedItem {
    * @return the field name, or the index as string if not unique, or empty not available.
    */
   string getFieldName(ssize_t fieldIndex) const { return m_data->getName(fieldIndex); }
+
+  /**
+   * Get the specified field.
+   * @param fieldIndex the index of the field (excluding ignored fields).
+   * @return the field, or @a nullptr if not available.
+   */
+  const SingleDataField* getField(ssize_t fieldIndex) const { return m_data->getField(fieldIndex); }
 
   /**
    * Get whether this is a write message.
@@ -508,6 +519,12 @@ class Message : public AttributedItem {
   const SlaveSymbolString& getLastSlaveData() const { return m_lastSlaveData; }
 
   /**
+   * Get the time when this message was created.
+   * @return the time when this message was created.
+   */
+  time_t getCreateTime() const { return m_createTime; }
+
+  /**
    * Get the time when this message was last seen with reasonable data.
    * @return the time when this message was last seen, or 0.
    */
@@ -543,28 +560,31 @@ class Message : public AttributedItem {
    * Write the message definition or parts of it to the @a ostream.
    * @param fieldNames the list of field names to write, or nullptr for all.
    * @param withConditions whether to include the optional conditions prefix.
+   * @param outputFormat the @a OutputFormat options.
    * @param output the @a ostream to append the formatted value to.
    */
-  void dump(const vector<string>* fieldNames, bool withConditions, ostream* output) const;
+  void dump(const vector<string>* fieldNames, bool withConditions, OutputFormat outputFormat, ostream* output) const;
 
   /**
    * Write the specified field to the @a ostream.
    * @param fieldName the field name to write.
    * @param withConditions whether to include the optional conditions prefix.
+   * @param outputFormat the @a OutputFormat options.
    * @param output the @a ostream to append the formatted value to.
    */
-  virtual void dumpField(const string& fieldName, bool withConditions, ostream* output) const;
+  virtual void dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output) const;
 
   /**
    * Decode the message from the last stored data in JSON format.
    * @param leadingSeparator whether to prepend a separator before the first value.
-   * @param appendDirection whether to append the direction to the name key (for passive and write).
+   * @param appendDirectionCondition whether to append the direction and condition to the name key.
+   * @param withData whether to add the last data as well.
    * @param addRaw whether to add the raw symbols as well.
    * @param outputFormat the @a OutputFormat options to use.
    * @param output the @a ostringstream to append the decoded value(s) to.
    */
-  virtual void decodeJson(bool leadingSeparator, bool appendDirection, bool addRaw, OutputFormat outputFormat,
-      ostringstream* output) const;
+  virtual void decodeJson(bool leadingSeparator, bool appendDirectionCondition, bool withData, bool addRaw,
+                          OutputFormat outputFormat, ostringstream* output) const;
 
  protected:
   /** the optional circuit name. */
@@ -635,6 +655,9 @@ class Message : public AttributedItem {
 
   /** the last seen @a SlaveSymbolString. */
   SlaveSymbolString m_lastSlaveData;
+
+  /** the system time when the message was created. */
+  time_t m_createTime;
 
   /** the system time when the message was last updated, 0 for never. */
   time_t m_lastUpdateTime;
@@ -723,7 +746,7 @@ class ChainedMessage : public Message {
 
  protected:
   // @copydoc
-  void dumpField(const string& fieldName, bool withConditions, ostream* output) const override;
+  void dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output) const override;
 
 
  private:
@@ -1519,9 +1542,10 @@ class MessageMap : public MappedFileReader {
   /**
    * Write the message definitions to the @a ostream.
    * @param withConditions whether to include the optional conditions prefix.
+   * @param outputFormat the @a OutputFormat options.
    * @param output the @a ostream to append the formatted messages to.
    */
-  void dump(bool withConditions, ostream* output) const;
+  void dump(bool withConditions, OutputFormat outputFormat, ostream* output) const;
 
 
  private:

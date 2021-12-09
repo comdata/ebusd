@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>, Roland Jax 2012-2014 <ebusd@liwest.at>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>, Roland Jax 2012-2014 <ebusd@liwest.at>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -124,8 +124,8 @@ void Connection::run() {
     if (ret != 0) {
 #ifdef HAVE_PPOLL
       // new data from notify
-      if (ret < 0 || (fds[0].revents & (POLLIN | POLLERR | POLLHUP | POLLRDHUP))
-          || (fds[1].revents & (POLLERR | POLLHUP))) {
+      if (ret < 0 || (ret > 0 && ((fds[0].revents & (POLLIN | POLLERR | POLLHUP | POLLRDHUP))
+          || (fds[1].revents & (POLLERR | POLLHUP))))) {
         break;
       }
       // new data from socket
@@ -183,8 +183,11 @@ void Connection::run() {
     }
   }
 
-  delete m_socket;
-  m_socket = nullptr;
+  if (m_socket) {
+    delete m_socket;
+    m_socket = nullptr;
+  }
+  time(&m_endedAt);
   logInfo(lf_network, "[%05d] connection closed", getID());
 }
 
@@ -273,7 +276,11 @@ void Network::run() {
   }
 #endif
 #endif
+  int cleanupCnt = 0;
   while (true) {
+    if (++cleanupCnt > 10) {
+      cleanConnections();
+    }
 #ifdef HAVE_PPOLL
     // wait for new fd event
     ret = ppoll(fds, nfds, &tdiff, nullptr);
@@ -287,6 +294,7 @@ void Network::run() {
 #endif
     if (ret == 0) {
       cleanConnections();
+      cleanupCnt = 0;
       continue;
     }
     bool newData = false, isHttp = false;
@@ -332,9 +340,12 @@ void Network::run() {
 
 void Network::cleanConnections() {
   auto it = m_connections.begin();
+  time_t endBefore;
+  time(&endBefore);
+  endBefore += 5;  // after 5 seconds grace period
   while (it != m_connections.end()) {
-    if (!(*it)->isRunning()) {
-      Connection* connection = *it;
+    Connection* connection = *it;
+    if (connection && !connection->isRunning() && connection->endedBefore(&endBefore)) {
       it = m_connections.erase(it);
       delete connection;
       logDebug(lf_network, "dead connection removed - %d", m_connections.size());

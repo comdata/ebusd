@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2018 John Baier <ebusd@ebusd.eu>, Roland Jax 2012-2014 <ebusd@liwest.at>
+ * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>, Roland Jax 2012-2014 <ebusd@liwest.at>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -67,7 +67,7 @@ class NetMessage {
   explicit NetMessage(bool isHttp)
     : m_isHttp(isHttp), m_resultSet(false), m_disconnect(false), m_listenSince(0) {
     m_settings.mode = cm_normal;
-    m_settings.format = 0;
+    m_settings.format = OF_NONE;
     m_settings.listenWithUnknown = false;
     m_settings.listenOnlyUnknown = false;
     pthread_mutex_init(&m_mutex, nullptr);
@@ -227,11 +227,16 @@ class Connection : public Thread {
    * @param netQueue the reference to the @a NetMessage @a Queue.
    */
   Connection(TCPSocket* socket, const bool isHttp, Queue<NetMessage*>* netQueue)
-    : Thread(), m_isHttp(isHttp), m_socket(socket), m_netQueue(netQueue) {
+    : Thread(), m_isHttp(isHttp), m_socket(socket), m_netQueue(netQueue), m_endedAt(0) {
     m_id = ++m_ids;
   }
 
-  virtual ~Connection() { if (m_socket) delete m_socket; }
+  virtual ~Connection() {
+    if (m_socket) {
+      delete m_socket;
+      m_socket = nullptr;
+    }
+  }
   /**
    * endless loop for connection instance.
    */
@@ -248,6 +253,12 @@ class Connection : public Thread {
    */
   int getID() { return m_id; }
 
+  /**
+   * Return whether this connection has ended before the specified time.
+   * @param time the time to check against.
+   * @return true when this connection has ended before the specified time.
+   */
+  bool endedBefore(const time_t* time) const { return m_endedAt > 0 && time && m_endedAt < *time; }
 
  private:
   /** whether this is a HTTP connection. */
@@ -264,6 +275,9 @@ class Connection : public Thread {
 
   /** the ID of this connection. */
   int m_id;
+
+  /** the time when this connected ended, or 0 if not yet. */
+  time_t m_endedAt;
 
   /** the IF of the last opened connection. */
   static int m_ids;

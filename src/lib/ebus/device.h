@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2015-2018 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2015-2021 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -42,6 +42,9 @@ namespace ebusd {
 
 /** the transfer latency of the network device [ms]. */
 #define NETWORK_LATENCY_MS 30
+
+/** the extra transfer latency to take into account for enhanced protocol. */
+#define ENHANCED_LATENCY_MS 10
 
 /** the latency of the host [ms]. */
 #if defined(__CYGWIN__) || defined(_WIN32)
@@ -195,11 +198,20 @@ class Device {
   bool isReadOnly() const { return m_readOnly; }
 
   /**
+   * Return whether the device supports the ebusd enhanced protocol.
+   * @return whether the device supports the ebusd enhanced protocol.
+   */
+  bool isEnhancedProto() const { return m_enhancedProto; }
+
+  /**
    * Set the @a DeviceListener.
    * @param listener the @a DeviceListener.
    */
   void setListener(DeviceListener* listener) { m_listener = listener; }
 
+  result_t requestEnhancedInfo(symbol_t infoId);
+
+  string getEnhancedInfos();
 
  protected:
   /**
@@ -282,6 +294,30 @@ class Device {
 
   /** the read buffer read position. */
   size_t m_bufPos;
+
+  /** the extra features supported by the device. */
+  symbol_t m_extraFatures;
+
+  /** the ID of the last requested info. */
+  symbol_t m_infoId;
+
+  /** the info buffer expected length. */
+  size_t m_infoLen;
+
+  /** the info buffer write position. */
+  size_t m_infoPos;
+
+  /** the info buffer. */
+  symbol_t m_infoBuf[16];
+
+  /** a string describing the enhanced device temperature. */
+  string m_enhInfoTemperature;
+
+  /** a string describing the enhanced device supply voltage. */
+  string m_enhInfoSupplyVoltage;
+
+  /** a string describing the enhanced device bus voltage. */
+  string m_enhInfoBusVoltage;
 };
 
 

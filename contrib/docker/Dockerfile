@@ -18,7 +18,7 @@ ENV EBUSD_ARCH $TARGETARCH$TARGETVARIANT
 ENV EBUSD_VERSION $EBUSD_VERSION
 
 ADD . /build
-RUN ./make_debian.sh
+RUN ../make_debian.sh
 
 
 
@@ -39,7 +39,7 @@ ARG EBUSD_IMAGE
 ENV EBUSD_ARCH $TARGETARCH$TARGETVARIANT
 ENV EBUSD_VERSION $EBUSD_VERSION
 
-LABEL version "${EBUSD_VERSION}-${EBUSD_ARCH}-devel"
+LABEL version "${EBUSD_VERSION}-${EBUSD_ARCH}"
 
 COPY --from=build /build/ebusd-*_mqtt1.deb ebusd.deb
 

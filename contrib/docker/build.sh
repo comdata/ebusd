@@ -6,7 +6,7 @@ if [[ "$1" == "-h" ]]; then
   echo "  UPLOADHOST: build Debian release packages (with and without MQTT) and upload them to UPLOADHOST"
   exit 1
 fi
-archs=linux/amd64,linux/386,linux/arm/v7,linux/arm64
+archs=linux/amd64,linux/386,linux/arm/v7,linux/arm/v6,linux/arm64
 if [[ -z "$1" ]] || [[ "x$1" == "xrelease" ]]; then
   UPLOAD_URL=
 else

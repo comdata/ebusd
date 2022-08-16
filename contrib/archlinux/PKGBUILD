@@ -2,13 +2,14 @@
 # Contributor: Milan Knizek <knizek volny cz>
 # Usage: makepkg
 pkgname=ebusd
-pkgver=21.3
+pkgver=22.3
 pkgrel=1
 pkgdesc="ebusd, the daemon for communication with eBUS heating systems."
 arch=('i686' 'x86_64' 'armv6h' 'armv7h' 'aarch64')
 url=https://github.com/john30/ebusd/
 license=('GPL3')
-depends=()
+depends=('mosquitto' 'openssl' 'ca-certificates')
+makedepends=()
 optdepends=()
 conflicts=('ebusd' 'ebusd-git')
 provides=('ebusd')
@@ -35,6 +36,9 @@ package() {
   install -m 0644 contrib/archlinux/systemd/ebusd.service "${pkgdir}/usr/lib/systemd/system"
   install -d                                              "${pkgdir}/etc/conf.d"
   install -m 0644 contrib/archlinux/conf.d/ebusd          "${pkgdir}/etc/conf.d/ebusd"
+  install -d                                              "${pkgdir}/etc/ebusd"
+  install -m 0644 contrib/etc/ebusd/mqtt-hassio.cfg       "${pkgdir}/etc/ebusd/mqtt-hassio.cfg"
+  install -m 0644 contrib/etc/ebusd/mqtt-integration.cfg  "${pkgdir}/etc/ebusd/mqtt-integration.cfg"
 }
 # update md5sums: updpkgsums
-md5sums=('0ce4e4646445612373d5114bb2f99fa8')
+md5sums=('8e2d7e6fe8021dc792e381f4a7468e9d')

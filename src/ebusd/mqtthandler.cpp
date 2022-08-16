@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2016-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2016-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,7 +23,10 @@
 #include "ebusd/mqtthandler.h"
 #include <csignal>
 #include <deque>
+#include <algorithm>
+#include <utility>
 #include "lib/utils/log.h"
+#include "lib/ebus/symbol.h"
 
 namespace ebusd {
 
@@ -35,8 +38,12 @@ using std::dec;
 #define O_USER (O_CLID+1)
 #define O_PASS (O_USER+1)
 #define O_TOPI (O_PASS+1)
-#define O_RETA (O_TOPI+1)
-#define O_JSON (O_RETA+1)
+#define O_GTOP (O_TOPI+1)
+#define O_RETA (O_GTOP+1)
+#define O_PQOS (O_RETA+1)
+#define O_INTF (O_PQOS+1)
+#define O_IVAR (O_INTF+1)
+#define O_JSON (O_IVAR+1)
 #define O_LOGL (O_JSON+1)
 #define O_VERS (O_LOGL+1)
 #define O_IGIN (O_VERS+1)
@@ -50,34 +57,40 @@ using std::dec;
 
 /** the definition of the MQTT arguments. */
 static const struct argp_option g_mqtt_argp_options[] = {
-  {nullptr,        0,      nullptr,       0, "MQTT options:", 1 },
-  {"mqtthost",     O_HOST, "HOST",        0, "Connect to MQTT broker on HOST [localhost]", 0 },
-  {"mqttport",     O_PORT, "PORT",        0, "Connect to MQTT broker on PORT (usually 1883), 0 to disable [0]", 0 },
+  {nullptr,        0,      nullptr,      0, "MQTT options:", 1 },
+  {"mqtthost",     O_HOST, "HOST",       0, "Connect to MQTT broker on HOST [localhost]", 0 },
+  {"mqttport",     O_PORT, "PORT",       0, "Connect to MQTT broker on PORT (usually 1883), 0 to disable [0]", 0 },
   {"mqttclientid", O_CLID, "ID",         0, "Set client ID for connection to MQTT broker [" PACKAGE_NAME "_"
    PACKAGE_VERSION "_<pid>]", 0 },
-  {"mqttuser",     O_USER, "USER",        0, "Connect as USER to MQTT broker (no default)", 0 },
-  {"mqttpass",     O_PASS, "PASSWORD",    0, "Use PASSWORD when connecting to MQTT broker (no default)", 0 },
-  {"mqtttopic",    O_TOPI, "TOPIC",       0,
+  {"mqttuser",     O_USER, "USER",       0, "Connect as USER to MQTT broker (no default)", 0 },
+  {"mqttpass",     O_PASS, "PASSWORD",   0, "Use PASSWORD when connecting to MQTT broker (no default)", 0 },
+  {"mqtttopic",    O_TOPI, "TOPIC",      0,
    "Use MQTT TOPIC (prefix before /%circuit/%name or complete format) [ebusd]", 0 },
-  {"mqttretain",   O_RETA, nullptr,       0, "Retain all topics instead of only selected global ones", 0 },
-  {"mqttjson",     O_JSON, nullptr,       0, "Publish in JSON format instead of strings", 0 },
-  {"mqttverbose",  O_VERB, nullptr,       0, "Publish all available attributes", 0 },
+  {"mqttglobal",   O_GTOP, "TOPIC",      0,
+   "Use TOPIC for global data (default is \"global/\" suffix to mqtttopic prefix)", 0 },
+  {"mqttretain",   O_RETA, nullptr,      0, "Retain all topics instead of only selected global ones", 0 },
+  {"mqttqos",      O_PQOS, "QOS",        0, "Set the QoS value for all topics (0-2) [0]", 0 },
+  {"mqttint",      O_INTF, "FILE",       0, "Read MQTT integration settings from FILE (no default)", 0 },
+  {"mqttvar",      O_IVAR, "NAME=VALUE[,...]", 0, "Add variable(s) to the read MQTT integration settings", 0 },
+  {"mqttjson",     O_JSON, "short", OPTION_ARG_OPTIONAL,
+   "Publish in JSON format instead of strings, optionally in short (value directly below field key)", 0 },
+  {"mqttverbose",  O_VERB, nullptr,      0, "Publish all available attributes", 0 },
 #if (LIBMOSQUITTO_VERSION_NUMBER >= 1003001)
-  {"mqttlog",      O_LOGL, nullptr,       0, "Log library events", 0 },
+  {"mqttlog",      O_LOGL, nullptr,      0, "Log library events", 0 },
 #endif
 #if (LIBMOSQUITTO_VERSION_NUMBER >= 1004001)
-  {"mqttversion",  O_VERS, "VERSION",     0, "Use protocol VERSION [3.1]", 0 },
+  {"mqttversion",  O_VERS, "VERSION",    0, "Use protocol VERSION [3.1]", 0 },
 #endif
   {"mqttignoreinvalid", O_IGIN, nullptr, 0,
    "Ignore invalid parameters during init (e.g. for DNS not resolvable yet)", 0 },
-  {"mqttchanges",  O_CHGS, nullptr,       0, "Whether to only publish changed messages instead of all received", 0 },
+  {"mqttchanges",  O_CHGS, nullptr,      0, "Whether to only publish changed messages instead of all received", 0 },
 
 #if (LIBMOSQUITTO_MAJOR >= 1)
-  {"mqttca",       O_CAFI, "CA",          0, "Use CA file or dir (ending with '/') for MQTT TLS (no default)", 0 },
-  {"mqttcert",     O_CERT, "CERTFILE",    0, "Use CERTFILE for MQTT TLS client certificate (no default)", 0 },
-  {"mqttkey",      O_KEYF, "KEYFILE",     0, "Use KEYFILE for MQTT TLS client certificate (no default)", 0 },
-  {"mqttkeypass",  O_KEPA, "PASSWORD",    0, "Use PASSWORD for the encrypted KEYFILE (no default)", 0 },
-  {"mqttinsecure", O_INSE, nullptr,       0, "Allow insecure TLS connection (e.g. using a self signed certificate)", 0 },
+  {"mqttca",       O_CAFI, "CA",         0, "Use CA file or dir (ending with '/') for MQTT TLS (no default)", 0 },
+  {"mqttcert",     O_CERT, "CERTFILE",   0, "Use CERTFILE for MQTT TLS client certificate (no default)", 0 },
+  {"mqttkey",      O_KEYF, "KEYFILE",    0, "Use KEYFILE for MQTT TLS client certificate (no default)", 0 },
+  {"mqttkeypass",  O_KEPA, "PASSWORD",   0, "Use PASSWORD for the encrypted KEYFILE (no default)", 0 },
+  {"mqttinsecure", O_INSE, nullptr,      0, "Allow insecure TLS connection (e.g. using a self signed certificate)", 0 },
 #endif
 
   {nullptr,        0,      nullptr,       0, nullptr, 0 },
@@ -88,11 +101,12 @@ static uint16_t g_port = 0;               //!< optional port of MQTT broker, 0 t
 static const char* g_clientId = nullptr;  //!< optional clientid override for MQTT broker
 static const char* g_username = nullptr;  //!< optional user name for MQTT broker (no default)
 static const char* g_password = nullptr;  //!< optional password for MQTT broker (no default)
-/** the MQTT topic string parts. */
-static vector<string> g_topicStrs;
-/** the MQTT topic field parts. */
-static vector<string> g_topicFields;
+static const char* g_topic = nullptr;     //!< optional topic template
+static const char* g_globalTopic = nullptr;  //!< optional global topic
+static const char* g_integrationFile = nullptr;  //!< the integration settings file
+static vector<string>* g_integrationVars = nullptr;  //!< the integration settings variables
 static bool g_retain = false;             //!< whether to retail all topics
+static int g_qos = 0;                     //!< the qos value for all topics
 static OutputFormat g_publishFormat = OF_NONE;  //!< the OutputFormat for publishing messages
 #if (LIBMOSQUITTO_VERSION_NUMBER >= 1003001)
 static bool g_logFromLib = false;         //!< log library events
@@ -112,8 +126,11 @@ static const char* g_keypass = nullptr;   //!< client key file password for TLS
 static bool g_insecure = false;           //!< whether to allow insecure TLS connection
 #endif
 
-bool parseTopic(const string& topic, vector<string>* strs, vector<string>* fields);
-
+/**
+ * Replace all characters in the string with a space and return a copy of the original string.
+ * @param arg the string to replace.
+ * @return a copy of the original string.
+ */
 static char* replaceSecret(char *arg) {
   char* ret = strdup(arg);
   int cnt = 0;
@@ -122,6 +139,8 @@ static char* replaceSecret(char *arg) {
   }
   return ret;
 }
+
+void splitFields(const string& str, vector<string>* row);
 
 /**
  * The MQTT argument parsing function.
@@ -174,25 +193,77 @@ static error_t mqtt_parse_opt(int key, char *arg, struct argp_state *state) {
     break;
 
   case O_TOPI:  // --mqtttopic=ebusd
-    if (arg == nullptr || arg[0] == 0 || strchr(arg, '#') || strchr(arg, '+') || arg[strlen(arg)-1] == '/') {
+    if (arg == nullptr || arg[0] == 0 || strchr(arg, '+') || arg[strlen(arg)-1] == '/') {
       argp_error(state, "invalid mqtttopic");
       return EINVAL;
+    } else {
+      char *pos = strchr(arg, '#');
+      if (pos && (pos == arg || pos[1])) {  // allow # only at very last position (to indicate not using any default)
+        argp_error(state, "invalid mqtttopic");
+        return EINVAL;
+      }
     }
-    if (!parseTopic(arg, &g_topicStrs, &g_topicFields)) {
-      argp_error(state, "malformed mqtttopic");
+    if (g_topic) {
+      argp_error(state, "duplicate mqtttopic");
+      return EINVAL;
+    } else {
+      StringReplacer replacer;
+      if (!replacer.parse(arg, true)) {
+        argp_error(state, "malformed mqtttopic");
+        return EINVAL;
+      }
+      g_topic = arg;
     }
+    break;
+
+  case O_GTOP:  // --mqttglobal=global/
+    if (arg == nullptr || strchr(arg, '+') || strchr(arg, '#')) {
+      argp_error(state, "invalid mqttglobal");
+      return EINVAL;
+    }
+    g_globalTopic = arg;
     break;
 
   case O_RETA:  // --mqttretain
     g_retain = true;
     break;
 
-  case O_JSON:  // --mqttjson
+  case O_PQOS:  // --mqttqos=0
+    g_qos = parseSignedInt(arg, 10, 0, 2, &result);
+    if (result != RESULT_OK) {
+      argp_error(state, "invalid mqttqos value");
+      return EINVAL;
+    }
+    break;
+
+  case O_INTF:  // --mqttint=/etc/ebusd/mqttint.cfg
+    if (arg == nullptr || arg[0] == 0 || strcmp("/", arg) == 0) {
+      argp_error(state, "invalid mqttint file");
+      return EINVAL;
+    }
+    g_integrationFile = arg;
+    break;
+
+  case O_IVAR:  // --mqttvar=NAME=VALUE[,NAME=VALUE]*
+    if (arg == nullptr || arg[0] == 0 || !strchr(arg, '=')) {
+      argp_error(state, "invalid mqttvar");
+      return EINVAL;
+    }
+    if (!g_integrationVars) {
+      g_integrationVars = new vector<string>();
+    }
+    splitFields(arg, g_integrationVars);
+    break;
+
+  case O_JSON:  // --mqttjson[=short]
     g_publishFormat |= OF_JSON|OF_NAMES;
+    if (arg && strcmp("short", arg) == 0) {
+      g_publishFormat = (g_publishFormat & ~(OF_NAMES|OF_UNITS|OF_COMMENTS|OF_ALL_ATTRS)) | OF_SHORT;
+    }
     break;
 
   case O_VERB:  // --mqttverbose
-    g_publishFormat |= OF_NAMES|OF_UNITS|OF_COMMENTS|OF_ALL_ATTRS;
+    g_publishFormat = (g_publishFormat & ~OF_SHORT) | OF_NAMES|OF_UNITS|OF_COMMENTS|OF_ALL_ATTRS;
     break;
 
 #if (LIBMOSQUITTO_VERSION_NUMBER >= 1003001)
@@ -274,9 +345,6 @@ static const struct argp_child g_mqtt_argp_child = {&g_mqtt_argp, 0, "", 1};
 
 
 const struct argp_child* mqtthandler_getargs() {
-  if (g_topicStrs.empty()) {
-    g_topicStrs.push_back(PACKAGE);
-  }
   return &g_mqtt_argp_child;
 }
 
@@ -306,8 +374,7 @@ bool mqtthandler_register(UserInfo* userInfo, BusHandler* busHandler, MessageMap
     int revision = -1;
     mosquitto_lib_version(&major, &minor, &revision);
     if (major < LIBMOSQUITTO_MAJOR) {
-      logOtherError("mqtt", "invalid mosquitto version %d instead of %d", major, LIBMOSQUITTO_MAJOR);
-      return false;
+      logOtherError("mqtt", "invalid mosquitto version %d instead of %d, will try connecting anyway", major, LIBMOSQUITTO_MAJOR);
     }
     logOtherInfo("mqtt", "mosquitto version %d.%d.%d (compiled with %d.%d.%d)", major, minor, revision,
       LIBMOSQUITTO_MAJOR, LIBMOSQUITTO_MINOR, LIBMOSQUITTO_REVISION);
@@ -316,59 +383,6 @@ bool mqtthandler_register(UserInfo* userInfo, BusHandler* busHandler, MessageMap
   return true;
 }
 
-/** the known topic field names. */
-static const char* knownFieldNames[] = {
-  "circuit",
-  "name",
-  "field",
-};
-
-/** the number of known field names. */
-static const size_t knownFieldCount = sizeof(knownFieldNames) / sizeof(char*);
-
-
-/**
- * Parse the topic template.
- * @param topic the topic template.
- * @param strs the @a vector to which the string parts shall be added.
- * @param fields the @a vector to which the field parts shall be added.
- * @return true on success, false on malformed topic template.
- */
-bool parseTopic(const string& topic, vector<string>* strs, vector<string>* fields) {
-  size_t lastpos = 0;
-  size_t end = topic.length();
-  vector<string> columns;
-  strs->clear();
-  fields->clear();
-  for (size_t pos=topic.find('%', lastpos); pos != string::npos; ) {
-    size_t idx = knownFieldCount;
-    size_t len = 0;
-    for (size_t i = 0; i < knownFieldCount; i++) {
-      len = strlen(knownFieldNames[i]);
-      if (topic.substr(pos+1, len) == knownFieldNames[i]) {
-        idx = i;
-        break;
-      }
-    }
-    if (idx == knownFieldCount) {  // TODO could allow custom attributes here
-      return false;
-    }
-    string fieldName = knownFieldNames[idx];
-    for (const auto& it : *fields) {
-      if (it == fieldName) {
-        return false;  // duplicate column
-      }
-    }
-    strs->push_back(topic.substr(lastpos, pos-lastpos));
-    fields->push_back(fieldName);
-    lastpos = pos+1+len;
-    pos = topic.find('%', lastpos);
-  }
-  if (lastpos < end) {
-    strs->push_back(topic.substr(lastpos, end-lastpos));
-  }
-  return true;
-}
 
 #if (LIBMOSQUITTO_MAJOR >= 1)
 int on_keypassword(char *buf, int size, int rwflag, void *userdata) {
@@ -444,33 +458,146 @@ void on_message(
   handler->notifyTopic(topic, data);
 }
 
+/**
+ * possible data type names.
+ */
+static const char* typeNames[] = {
+    "number", "list", "string", "date", "time", "datetime",
+};
+
+/**
+ * possible message direction names by (write*2) + (passive*1).
+ */
+static const char* directionNames[] = {
+    "r", "u", "w", "uw",
+};
+
+string removeTrailingNonTopicPart(const string& str) {
+  size_t pos = str.find_last_not_of("/_");
+  if (pos == string::npos) {
+    return str;
+  }
+  return str.substr(0, pos + 1);
+}
 
 MqttHandler::MqttHandler(UserInfo* userInfo, BusHandler* busHandler, MessageMap* messages)
   : DataSink(userInfo, "mqtt"), DataSource(busHandler), WaitThread(), m_messages(messages), m_connected(false),
-    m_initialConnectFailed(false), m_lastUpdateCheckResult("."), m_lastScanStatus("."), m_lastErrorLogTime(0) {
-  m_publishByField = false;
+    m_initialConnectFailed(false), m_lastUpdateCheckResult("."), m_lastScanStatus(SCAN_STATUS_NONE), m_lastErrorLogTime(0) {
+  m_definitionsSince = 0;
   m_mosquitto = nullptr;
-  if (g_topicFields.empty()) {
-    if (g_topicStrs.empty()) {
-      g_topicStrs.push_back("");
+  bool hasIntegration = false;
+  if (g_integrationFile != nullptr) {
+    if (!m_replacers.parseFile(g_integrationFile)) {
+      logOtherError("mqtt", "unable to open integration file %s", g_integrationFile);
     } else {
-      string str = g_topicStrs[0];
-      if (str.empty() || str[str.length()-1] != '/') {
-        g_topicStrs[0] = str+"/";
-      }
-    }
-    g_topicFields.push_back("circuit");
-    g_topicStrs.push_back("/");
-    g_topicFields.push_back("name");
-  } else {
-    for (size_t i = 0; i < g_topicFields.size(); i++) {
-      if (g_topicFields[i] == "field") {
-        m_publishByField = true;
-        break;
+      hasIntegration = true;
+      if (g_integrationVars) {
+        for (auto& str : *g_integrationVars) {
+          m_replacers.parseLine(str);
+        }
       }
     }
   }
-  m_globalTopic = getTopic(nullptr, "global/");
+  if (g_integrationVars) {
+    delete g_integrationVars;
+    g_integrationVars = nullptr;
+  }
+  // determine topic and prefix
+  StringReplacer& topic = m_replacers.get("topic");
+  if (g_topic) {
+    string str = g_topic;
+    bool noDefault = str[str.size()-1] == '#';
+    if (noDefault) {
+      str.resize(str.size()-1);
+    }
+    bool parse = true;
+    if (hasIntegration && !topic.empty()) {
+      // topic defined in cmdline and integration file.
+      if (str.find('%') == string::npos) {
+        // cmdline topic is only the prefix, use it
+        m_replacers.set("prefix", str);
+        m_replacers.set("prefixn", removeTrailingNonTopicPart(str));
+        parse = false;
+      }  // else: cmdline topic is more than just a prefix => override integration topic completely
+    }
+    if (parse) {
+      if (!topic.parse(str, true, true)) {
+        logOtherNotice("mqtt", "unknown or duplicate topic parts potentially prevent matching incoming topics");
+        topic.parse(str, true);
+      } else if (!topic.checkMatchability()) {
+        logOtherNotice("mqtt", "missing separators between topic parts potentially prevent matching incoming topics");
+      }
+    }
+    if (!noDefault) {
+      topic.ensureDefault();
+    }
+  } else {
+    topic.ensureDefault();
+  }
+  m_staticTopic = !topic.has("name");
+  m_publishByField = !m_staticTopic && topic.has("field");
+  if (hasIntegration) {
+    m_replacers.set("version", PACKAGE_VERSION);
+    if (m_replacers["prefix"].empty()) {
+      string line = m_replacers.get("topic", true);
+      if (line.empty() || line=="/") {
+        line = string(PACKAGE);  // ensure prefix if cmdline topic is absent
+      }
+      m_replacers.set("prefix", line);
+      m_replacers.set("prefixn", removeTrailingNonTopicPart(line));
+    }
+    m_replacers.reduce(true);
+    if (!m_replacers["type_switch-names"].empty() || m_replacers.uses("type_switch")) {
+      ostringstream ostr;
+      for (int i=-1; i<static_cast<signed>(sizeof(directionNames)/sizeof(char*)); i++) {
+        for (auto typeName : typeNames) {
+          ostr.str("");
+          if (i >= 0) {
+            ostr << directionNames[i] << '-';
+          }
+          ostr << typeName;
+          const string suffix = ostr.str();
+          string str = m_replacers.get("type_switch-" + suffix, false, false, "type_switch");
+          if (str.empty()) {
+            continue;
+          }
+          str += '\n';  // add trailing newline to ease the split
+          size_t from = 0;
+          do {
+            size_t pos = str.find('\n', from);
+            string line = str.substr(from, pos - from);
+            from = pos + 1;
+            FileReader::trim(&line);
+            if (!line.empty()) {
+              pos = line.find('=');
+              if (pos != string::npos && pos > 0) {
+                string left = line.substr(0, pos);
+                FileReader::trim(&left);
+                string right = line.substr(pos + 1);
+                FileReader::trim(&right);
+                FileReader::tolower(&right);
+                m_typeSwitches[suffix].push_back({left, right});
+              }
+            }
+          } while (from < str.length());
+        }
+      }
+    }
+  }
+  m_hasDefinitionTopic = !m_replacers.get("definition-topic", true, false).empty();
+  m_hasDefinitionFieldsPayload = m_replacers.uses("fields_payload");
+  m_subscribeConfigRestartTopic = m_replacers.get("config_restart-topic", false, false);
+  m_subscribeConfigRestartPayload = m_replacers.get("config_restart-payload", false, false);
+  if (g_globalTopic) {
+    m_globalTopic.parse(g_globalTopic);
+  } else {
+    m_globalTopic.parse(getTopic(nullptr, "%circuit/%name"));
+  }
+  if (m_globalTopic.has("circuit")) {
+    map<string, string> values;
+    values["circuit"] = "global";
+    m_globalTopic.compress(values);
+  }
   m_subscribeTopic = getTopic(nullptr, "#");
   if (check(mosquitto_lib_init(), "unable to initialize")) {
     signal(SIGPIPE, SIG_IGN);  // needed before libmosquitto v. 1.1.3
@@ -503,7 +630,7 @@ MqttHandler::MqttHandler(UserInfo* userInfo, BusHandler* busHandler, MessageMap*
         logOtherError("mqtt", "unable to set username/password, trying without");
       }
     }
-    string willTopic = m_globalTopic+"running";
+    string willTopic = m_globalTopic.get("", "running");
     string willData = "false";
     size_t len = willData.length();
 #if (LIBMOSQUITTO_MAJOR >= 1)
@@ -564,7 +691,7 @@ MqttHandler::~MqttHandler() {
   mosquitto_lib_cleanup();
 }
 
-void MqttHandler::start() {
+void MqttHandler::startHandler() {
   if (m_mosquitto) {
     WaitThread::start("MQTT");
   }
@@ -573,9 +700,16 @@ void MqttHandler::start() {
 void MqttHandler::notifyConnected() {
   if (m_mosquitto && isRunning()) {
     const string sep = (g_publishFormat & OF_JSON) ? "\"" : "";
-    publishTopic(m_globalTopic+"version", sep + (PACKAGE_STRING "." REVISION) + sep, true);
-    publishTopic(m_globalTopic+"running", "true", true);
-    check(mosquitto_subscribe(m_mosquitto, nullptr, m_subscribeTopic.c_str(), 0), "subscribe");
+    if (m_globalTopic.has("name")) {
+      publishTopic(m_globalTopic.get("", "version"), sep + (PACKAGE_STRING "." REVISION) + sep, true);
+    }
+    publishTopic(m_globalTopic.get("", "running"), "true", true);
+    if (!m_staticTopic) {
+      check(mosquitto_subscribe(m_mosquitto, nullptr, m_subscribeTopic.c_str(), 0), "subscribe");
+      if (!m_subscribeConfigRestartTopic.empty()) {
+        check(mosquitto_subscribe(m_mosquitto, nullptr, m_subscribeConfigRestartTopic.c_str(), 0), "subscribe def.");
+      }
+    }
   }
 }
 
@@ -584,9 +718,23 @@ void MqttHandler::notifyTopic(const string& topic, const string& data) {
   if (pos == string::npos) {
     return;
   }
+  if (!m_subscribeConfigRestartTopic.empty() && topic == m_subscribeConfigRestartTopic) {
+    if (m_subscribeConfigRestartPayload.empty() || data == m_subscribeConfigRestartPayload) {
+      m_definitionsSince = 0;
+    }
+    return;
+  }
   string direction = topic.substr(pos+1);
   if (direction.empty()) {
     return;
+  }
+  string matchTopic = topic.substr(0, pos);
+  pos = direction.find('?');
+  string args;
+  if (pos != string::npos) {
+    // support e.g. ?1 in topic for poll prio
+    args = direction.substr(pos+1);
+    direction = direction.substr(0, pos);
   }
   bool isWrite = direction == "set";
   bool isList = !isWrite && direction == "list";
@@ -595,60 +743,10 @@ void MqttHandler::notifyTopic(const string& topic, const string& data) {
   }
 
   logOtherDebug("mqtt", "received topic %s with data %s", topic.c_str(), data.c_str());
-  string remain = topic.substr(0, pos);
-  size_t last = 0;
-  string circuit, name;
-  bool finalField = false;
-  for (size_t idx = 0; idx < g_topicStrs.size()+1 && !finalField; idx++) {
-    string field;
-    string chk;
-    if (idx < g_topicStrs.size()) {
-      chk = g_topicStrs[idx];
-      pos = remain.find(chk, last);
-      if (pos == string::npos) {
-        if (!isList) {
-          return;
-        }
-        if (idx == 0 && remain+"/" == chk) {  // check for only first prefix, e.g. "ebusd/"
-          break;
-        }
-        pos = remain.size();
-        finalField = true;
-      }
-    } else if (idx-1 < g_topicFields.size()) {
-      pos = remain.size();
-    } else if (last < remain.size()) {
-      if (!isList) {
-        return;
-      }
-      break;
-    } else {
-      break;
-    }
-    field = remain.substr(last, pos-last);
-    last = pos+chk.size();
-    if (idx == 0) {
-      if (pos > 0) {
-        return;
-      }
-    } else {
-      if (field.empty()) {
-        if (!isList) {
-          return;
-        }
-        continue;
-      }
-      string fieldName = g_topicFields[idx-1];
-      if (fieldName == "circuit") {
-        circuit = field;
-      } else if (fieldName == "name") {
-        name = field;
-      } else if (fieldName == "field") {
-        // field = field;  // TODO add support for writing a single field
-      } else {
-        return;
-      }
-    }
+  string circuit, name, field;
+  ssize_t match = m_replacers.get("topic").match(matchTopic, &circuit, &name, &field);
+  if (match < 0 && !isList) {
+    logOtherError("mqtt", "received unmatchable topic %s", topic.c_str());
   }
   if (isList) {
     logOtherInfo("mqtt", "received list topic for %s %s", circuit.c_str(), name.c_str());
@@ -664,7 +762,7 @@ void MqttHandler::notifyTopic(const string& topic, const string& data) {
     m_messages->findAll(circuit, name, m_levels, !(circuitPrefix || namePrefix), true, true,
                         true, true, true, 0, 0, false, &messages);
     bool onlyWithData = !data.empty();
-    for (const auto message : messages) {
+    for (const auto& message : messages) {
       if ((circuitPrefix && (
           message->getCircuit().substr(0, circuit.length()) != circuit
           || (!namePrefix && name.length() > 0 && message->getName() != name)))
@@ -698,20 +796,22 @@ void MqttHandler::notifyTopic(const string& topic, const string& data) {
   if (!message->isPassive()) {
     string useData = data;
     if (!isWrite && !data.empty()) {
-      size_t pos = useData.find_last_of('?');
+      pos = useData.find_last_of('?');
       if (pos != string::npos && pos > 0 && useData[pos-1] != UI_FIELD_SEPARATOR) {
         pos = string::npos;
       }
       if (pos != string::npos) {
-        string args = useData.substr(pos + 1);
-        useData = useData.substr(0, pos > 0 ? pos - 1 : pos);
-        if (!args.empty()) {
-          result_t ret = RESULT_OK;
-          size_t pollPriority = (size_t)parseInt(args.c_str(), 10, 1, 9, &ret);
-          if (ret == RESULT_OK && pollPriority > 0 && message->setPollPriority(pollPriority)) {
-            m_messages->addPollMessage(false, message);
-          }
+        if (args.empty()) {
+          args = useData.substr(pos + 1);
         }
+        useData = useData.substr(0, pos > 0 ? pos - 1 : pos);
+      }
+    }
+    if (!args.empty()) {
+      result_t ret = RESULT_OK;
+      auto pollPriority = (size_t)parseInt(args.c_str(), 10, 1, 9, &ret);
+      if (ret == RESULT_OK && pollPriority > 0 && message->setPollPriority(pollPriority)) {
+        m_messages->addPollMessage(false, message);
       }
     }
     result_t result = m_busHandler->readFromBus(message, useData);
@@ -729,26 +829,87 @@ void MqttHandler::notifyTopic(const string& topic, const string& data) {
 void MqttHandler::notifyUpdateCheckResult(const string& checkResult) {
   if (checkResult != m_lastUpdateCheckResult) {
     m_lastUpdateCheckResult = checkResult;
-    const string sep = (g_publishFormat & OF_JSON) ? "\"" : "";
-    publishTopic(m_globalTopic+"updatecheck", sep + (checkResult.empty() ? "OK" : checkResult) + sep, true);
+    if (m_globalTopic.has("name")) {
+      const string sep = (g_publishFormat & OF_JSON) ? "\"" : "";
+      publishTopic(m_globalTopic.get("", "updatecheck"), sep + (checkResult.empty() ? "OK" : checkResult) + sep, true);
+    }
   }
 }
 
-void MqttHandler::notifyScanStatus(const string& scanStatus) {
+void MqttHandler::notifyScanStatus(scanStatus_t scanStatus) {
   if (scanStatus != m_lastScanStatus) {
     m_lastScanStatus = scanStatus;
-    const string sep = (g_publishFormat & OF_JSON) ? "\"" : "";
-    publishTopic(m_globalTopic+"scan", sep + (scanStatus.empty() ? "OK" : scanStatus) + sep, true);
+    if (m_globalTopic.has("name")) {
+      const string sep = (g_publishFormat & OF_JSON) ? "\"" : "";
+      string message;
+      switch (scanStatus) {
+        case SCAN_STATUS_RUNNING:
+          message = "running";
+          break;
+        case SCAN_STATUS_FINISHED:
+          message = "finished";
+          break;
+        default:
+          message = "OK";
+      }
+      publishTopic(m_globalTopic.get("", "scan"), sep + message + sep, true);
+    }
   }
+}
+
+bool parseBool(const string& str) {
+  return !str.empty() && !(str == "0" || str == "no" || str == "false");
+}
+
+void splitFields(const string& str, vector<string>* row) {
+  std::istringstream istr;
+  istr.str(str);
+  unsigned int lineNo = 0;
+  FileReader::splitFields(&istr, row, &lineNo, nullptr, nullptr, false);
 }
 
 void MqttHandler::run() {
   time_t lastTaskRun, now, start, lastSignal = 0, lastUpdates = 0;
   bool signal = false;
-  string signalTopic = m_globalTopic+"signal";
-  string uptimeTopic = m_globalTopic+"uptime";
+  bool globalHasName = m_globalTopic.has("name");
+  string signalTopic = m_globalTopic.get("", "signal");
+  string uptimeTopic = m_globalTopic.get("", "uptime");
   ostringstream updates;
-
+  unsigned int filterPriority = 0;
+  unsigned int filterSeen = 0;
+  string filterCircuit, filterNonCircuit, filterName, filterNonName, filterField, filterNonField,
+      filterLevel, filterDirection;
+  vector<string> typeSwitchNames;
+  if (m_hasDefinitionTopic) {
+    result_t result = RESULT_OK;
+    filterPriority = parseInt(m_replacers["filter-priority"].c_str(), 10, 0, 9, &result);
+    if (result != RESULT_OK) {
+      filterPriority = 0;
+    }
+    filterSeen = parseInt(m_replacers["filter-seen"].c_str(), 10, 0, 9, &result);
+    if (result != RESULT_OK) {
+      filterSeen = 0;
+    }
+    filterCircuit = m_replacers["filter-circuit"];
+    FileReader::tolower(&filterCircuit);
+    filterNonCircuit = m_replacers["filter-non-circuit"];
+    FileReader::tolower(&filterNonCircuit);
+    filterName = m_replacers["filter-name"];
+    FileReader::tolower(&filterName);
+    filterNonName = m_replacers["filter-non-name"];
+    FileReader::tolower(&filterNonName);
+    filterField = m_replacers["filter-field"];
+    FileReader::tolower(&filterField);
+    filterNonField = m_replacers["filter-non-field"];
+    FileReader::tolower(&filterNonField);
+    filterLevel = m_replacers["filter-level"];
+    FileReader::tolower(&filterLevel);
+    filterDirection = m_replacers["filter-direction"];
+    FileReader::tolower(&filterDirection);
+    if (!m_typeSwitches.empty()) {
+      splitFields(m_replacers["type_switch-names"], &typeSwitchNames);
+    }
+  }
   time(&now);
   start = lastTaskRun = now;
   bool allowReconnect = false;
@@ -767,12 +928,227 @@ void MqttHandler::run() {
       lastTaskRun = now;
     } else if (now > lastTaskRun+15) {
       allowReconnect = true;
-      sendSignal = true;
-      time_t uptime = now-start;
-      updates.str("");
-      updates.clear();
-      updates << dec << static_cast<unsigned>(uptime);
-      publishTopic(uptimeTopic, updates.str());
+      if (m_connected) {
+        sendSignal = true;
+        time_t uptime = now - start;
+        updates.str("");
+        updates.clear();
+        if (globalHasName) {
+          updates << dec << static_cast<unsigned>(uptime);
+          publishTopic(uptimeTopic, updates.str());
+        }
+      }
+      if (m_connected && m_definitionsSince == 0) {
+        publishDefinition(m_replacers, "def_global_running-", m_globalTopic.get("", "running"), "global", "running",
+                          "def_global-");
+        if (globalHasName) {
+          publishDefinition(m_replacers, "def_global_version-", m_globalTopic.get("", "version"), "global", "version",
+                            "def_global-");
+          publishDefinition(m_replacers, "def_global_signal-", signalTopic, "global", "signal", "def_global-");
+          publishDefinition(m_replacers, "def_global_uptime-", uptimeTopic, "global", "uptime", "def_global-");
+          publishDefinition(m_replacers, "def_global_updatecheck-", m_globalTopic.get("", "updatecheck"), "global",
+                            "updatecheck", "def_global-");
+          publishDefinition(m_replacers, "def_global_scan-", m_globalTopic.get("", "scan"), "global", "scan",
+                            "def_global-");
+        }
+        m_definitionsSince = 1;
+      }
+      if (m_connected && m_hasDefinitionTopic) {
+        ostringstream ostr;
+        deque<Message*> messages;
+        m_messages->findAll("", "", m_levels, false, true, true, true, true, true, 0, 0, false, &messages);
+        for (const auto& message : messages) {
+          bool checkPollAdjust = false;
+          if (filterSeen > 0) {
+            if (message->getLastUpdateTime() == 0) {
+              if (message->isPassive()) {
+                // only wait for data on passive messages
+                continue;  // no data ever
+              }
+              if (!message->isWrite()) {
+                // only wait for data on read messages or set their poll prio
+                if (filterSeen > 1 && (!message->getPollPriority() || message->getPollPriority() > filterSeen)
+                  && (filterPriority == 0 || filterSeen <= filterPriority)
+                ) {
+                  // check for poll prio adjustment after all other filters
+                  checkPollAdjust = true;
+                } else {
+                  continue;  // no poll adjustment
+                }
+              }
+            }
+            if (message->getDataHandlerState()&1) {
+              // already seen in the past, check for poll prio update
+              if (m_definitionsSince > 1 && message->getCreateTime() <= m_definitionsSince) {
+                continue;
+              }
+            }
+            message->setDataHandlerState(1, true);
+          } else if (message->getCreateTime() <= m_definitionsSince) {  // only newer defined
+            continue;
+          }
+          if (!FileReader::matches(message->getCircuit(), filterCircuit, true, true)
+          || (!filterNonCircuit.empty() && FileReader::matches(message->getCircuit(), filterNonCircuit, true, true))
+          || !FileReader::matches(message->getName(), filterName, true, true)
+          || (!filterNonName.empty() && FileReader::matches(message->getName(), filterNonName, true, true))
+          || !FileReader::matches(message->getLevel(), filterLevel, true, true)) {
+            continue;
+          }
+          const string direction = directionNames[(message->isWrite() ? 2 : 0) + (message->isPassive() ? 1 : 0)];
+          if (!FileReader::matches(direction, filterDirection, true, true)) {
+            continue;
+          }
+          if (checkPollAdjust) {
+            if (!message->setPollPriority(filterSeen)) {
+              continue;
+            }
+            m_messages->addPollMessage(false, message);
+          }
+          if (filterPriority > 0 && (message->getPollPriority() == 0 || message->getPollPriority() > filterPriority)) {
+            continue;
+          }
+
+          StringReplacers msgValues = m_replacers;  // need a copy here as the contents are manipulated
+          msgValues.set("circuit", message->getCircuit());
+          msgValues.set("name", message->getName());
+          msgValues.set("priority", static_cast<int>(message->getPollPriority()));
+          msgValues.set("level", message->getLevel());
+          msgValues.set("direction", direction);
+          msgValues.set("messagecomment", message->getAttribute("comment"));
+          msgValues.reduce(true);
+          string str = msgValues.get("direction_map-"+direction, false, false);
+          msgValues.set("direction_map", str);
+          msgValues.reduce(true);
+          ostringstream fields;
+          size_t fieldCount = message->getFieldCount();
+          for (size_t index = 0; index < fieldCount; index++) {
+            const SingleDataField* field = message->getField(index);
+            if (!field || field->isIgnored()) {
+              continue;
+            }
+            string fieldName = message->getFieldName(index);
+            if (fieldName.empty() && fieldCount == 1) {
+              fieldName = "0";  // might occur for unnamed single field sets
+            }
+            if (!FileReader::matches(fieldName, filterField, true, true)
+            || (!filterNonField.empty() && FileReader::matches(fieldName, filterNonField, true, true))) {
+              continue;
+            }
+            const DataType* dataType = field->getDataType();
+            string typeStr;
+            if (dataType->isNumeric()) {
+              if (field->isList()) {
+                typeStr = "list";
+              } else {
+                typeStr = "number";
+              }
+            } else if (dataType->hasFlag(DAT)) {
+              auto dt = dynamic_cast<const DateTimeDataType*>(dataType);
+              if (dt->hasDate()) {
+                typeStr = dt->hasDate() ? "datetime" : "date";
+              } else {
+                typeStr = "time";
+              }
+            } else {
+              typeStr = "string";
+            }
+            ostr.str("");
+            ostr << "type_map-" << direction << "-" << typeStr;
+            str = msgValues.get(ostr.str(), false, false);
+            if (str.empty()) {
+              ostr.str("");
+              ostr << "type_map-" << typeStr;
+              str = msgValues.get(ostr.str(), false, false);
+            }
+            if (str.empty()) {
+              continue;
+            }
+            StringReplacers values = msgValues;  // need a copy here as the contents are manipulated
+            values.set("index", static_cast<signed>(index));
+            values.set("field", fieldName);
+            values.set("fieldname", field->getName(-1));
+            values.set("type", typeStr);
+            values.set("type_map", str);
+            values.set("basetype", dataType->getId());
+            values.set("comment", field->getAttribute("comment"));
+            values.set("unit", field->getAttribute("unit"));
+            if (dataType->isNumeric()) {
+              auto dt = dynamic_cast<const NumberDataType*>(dataType);
+              ostr.str("");
+              if (dt->getMinMax(false, OF_NONE, &ostr) == RESULT_OK) {
+                values.set("min", ostr.str());
+                ostr.str("");
+              }
+              if (dt->getMinMax(true, OF_NONE, &ostr) == RESULT_OK) {
+                values.set("max", ostr.str());
+              }
+            }
+            if (!m_typeSwitches.empty()) {
+              values.reduce(true);
+              str = values.get("type_switch-by", false, false);
+              string typeSwitch;
+              for (int i = 0; i < 2; i++) {
+                ostr.str("");
+                if (i == 0) {
+                  ostr << direction << '-';
+                }
+                ostr << typeStr;
+                const string key = ostr.str();
+                for (auto const &check : m_typeSwitches[key]) {
+                  if (FileReader::matches(str, check.second, true, true)) {
+                    typeSwitch = check.first;
+                    i = 2;  // early exit
+                    break;
+                  }
+                }
+              }
+              values.set("type_switch", typeSwitch);
+              if (!typeSwitchNames.empty()) {
+                vector<string> strs;
+                splitFields(typeSwitch, &strs);
+                for (size_t pos = 0; pos < strs.size() && pos < typeSwitchNames.size(); pos++) {
+                  values.set(typeSwitchNames[pos], strs[pos]);
+                }
+              }
+            }
+            values.reduce(true);
+            string typePartSuffix = values["type_part-by"];
+            if (typePartSuffix.empty()) {
+              typePartSuffix = typeStr;
+            }
+            str = values.get("type_part-" + typePartSuffix, false, false);
+            values.set("type_part", str);
+            values.reduce();
+            if (m_hasDefinitionFieldsPayload) {
+              string value = values["field_payload"];
+              if (!value.empty()) {
+                if (fields.tellp() > 0) {
+                  fields << values["field-separator"];
+                }
+                fields << value;
+              }
+              continue;
+            }
+            publishDefinition(values);
+          }
+          if (fields.tellp() > 0) {
+            msgValues.set("fields_payload", fields.str());
+            publishDefinition(msgValues);
+          }
+          if (filterSeen && message->getLastUpdateTime() > message->getCreateTime()) {
+            // ensure data is published as well
+            m_updatedMessages[message->getKey()]++;
+          } else if (filterSeen && direction == "w") {
+            // publish data for read pendant of write message
+            Message* read = m_messages->find(message->getCircuit(), message->getName(), "", false);
+            if (read && read->getLastUpdateTime() > 0) {
+              m_updatedMessages[read->getKey()]++;
+            }
+          }
+        }
+        m_definitionsSince = now+1;  // +1 to not do the same ones again
+        needsWait = true;
+      }
       time(&lastTaskRun);
     }
     if (sendSignal) {
@@ -780,12 +1156,16 @@ void MqttHandler::run() {
         lastSignal = now;
         if (!signal || reconnected) {
           signal = true;
-          publishTopic(signalTopic, "true", true);
+          if (globalHasName) {
+            publishTopic(signalTopic, "true", true);
+          }
         }
       } else {
         if (signal || reconnected) {
           signal = false;
-          publishTopic(signalTopic, "false", true);
+          if (globalHasName) {
+            publishTopic(signalTopic, "false", true);
+          }
         }
       }
     }
@@ -795,7 +1175,7 @@ void MqttHandler::run() {
         for (auto it = m_updatedMessages.begin(); it != m_updatedMessages.end(); ) {
           const vector<Message*>* messages = m_messages->getByKey(it->first);
           if (messages) {
-            for (auto message : *messages) {
+            for (const auto& message : *messages) {
               if (message->getLastChangeTime() > 0 && message->isAvailable()
               && (!g_onlyChanges || message->getLastChangeTime() > lastUpdates)) {
                 updates.str("");
@@ -817,8 +1197,57 @@ void MqttHandler::run() {
       break;
     }
   }
-  publishTopic(signalTopic, "false", true);
-  publishTopic(m_globalTopic+"scan", "", true);  // clear retain of scan status
+  if (globalHasName) {
+    publishTopic(signalTopic, "false", true);
+    publishTopic(m_globalTopic.get("", "scan"), "", true);  // clear retain of scan status
+  }
+}
+
+void MqttHandler::publishDefinition(StringReplacers values, const string& prefix, const string& topic,
+                                    const string& circuit, const string& name, const string& fallbackPrefix) {
+  bool reduce = false;
+  if (!topic.empty()) {
+    values.set("topic", topic);
+    reduce = true;
+  }
+  if (!circuit.empty()) {
+    values.set("circuit", circuit);
+    reduce = true;
+  }
+  if (!name.empty()) {
+    values.set("name", name);
+    reduce = true;
+  }
+  if (reduce) {
+    values.reduce();
+  }
+  bool noFallback = fallbackPrefix.empty();
+  string defTopic = values.get(prefix+"topic", false, false,
+                               noFallback ? "" : fallbackPrefix+"topic");
+  if (defTopic.empty()) {
+    return;
+  }
+  string payload = values.get(prefix+"payload", false, false,
+                              noFallback ? "" : fallbackPrefix+"payload");
+  string retainStr = values.get(prefix+"retain", false, false,
+                                noFallback ? "" : fallbackPrefix+"retain");
+  bool retain = parseBool(retainStr);
+  publishTopic(defTopic, payload, retain);
+}
+
+void MqttHandler::publishDefinition(const StringReplacers& values) {
+  string defTopic = values.get("definition-topic", false);
+  if (defTopic.empty()) {
+    if (needsLog(lf_other, ll_debug)) {
+      const string str = values.get("definition-topic").str();
+      logOtherDebug("mqtt", "cannot publish incomplete definition topic %s", str.c_str());
+    }
+    return;
+  }
+  string payload = values.get("definition-payload", false);
+  string retainStr = values.get("definition-retain", false);
+  bool retain = parseBool(retainStr);
+  publishTopic(defTopic, payload, retain);
 }
 
 bool MqttHandler::handleTraffic(bool allowReconnect) {
@@ -871,24 +1300,10 @@ bool MqttHandler::handleTraffic(bool allowReconnect) {
 }
 
 string MqttHandler::getTopic(const Message* message, const string& suffix, const string& fieldName) {
-  ostringstream ret;
-  for (size_t i = 0; i < g_topicStrs.size(); i++) {
-    ret << g_topicStrs[i];
-    if (!message) {
-      break;
-    }
-    if (i < g_topicFields.size()) {
-      if (g_topicFields[i] == "field") {
-        ret << fieldName;
-      } else {
-        message->dumpField(g_topicFields[i], false, OF_NONE, &ret);
-      }
-    }
+  if (!message || m_staticTopic) {
+    return m_replacers.get("topic", true) + suffix;
   }
-  if (!suffix.empty()) {
-    ret << suffix;
-  }
-  return ret.str();
+  return m_replacers.get("topic").get(message, fieldName) + suffix;
 }
 
 void MqttHandler::publishMessage(const Message* message, ostringstream* updates, bool includeWithoutData) {
@@ -902,6 +1317,12 @@ void MqttHandler::publishMessage(const Message* message, ostringstream* updates,
     }
     if (json) {
       *updates << "{";
+      if (m_staticTopic) {
+        *updates << "\"circuit\":\"" << message->getCircuit() << "\",\"name\":\"" << message->getName()
+                 << "\",\"fields\":{";
+      }
+    } else if (m_staticTopic) {
+      *updates << message->getCircuit() << UI_FIELD_SEPARATOR << message->getName() << UI_FIELD_SEPARATOR;
     }
     result_t result = message->decodeLastData(false, nullptr, -1, outputFormat, updates);
     if (result != RESULT_OK) {
@@ -910,6 +1331,9 @@ void MqttHandler::publishMessage(const Message* message, ostringstream* updates,
       return;
     }
     if (json) {
+      if (m_staticTopic) {
+        *updates << "}";
+      }
       *updates << "}";
     }
     publishTopic(getTopic(message), updates->str());
@@ -942,7 +1366,7 @@ void MqttHandler::publishTopic(const string& topic, const string& data, bool ret
   const size_t len = strlen(dataStr);
   logOtherDebug("mqtt", "publish %s %s", topicStr, dataStr);
   check(mosquitto_publish(m_mosquitto, nullptr, topicStr, (uint32_t)len,
-      reinterpret_cast<const uint8_t*>(dataStr), 0, g_retain || retain), "publish");
+      reinterpret_cast<const uint8_t*>(dataStr), g_qos, g_retain || retain), "publish");
 }
 
 void MqttHandler::publishEmptyTopic(const string& topic) {

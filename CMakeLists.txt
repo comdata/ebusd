@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.12 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.7.1 FATAL_ERROR)
 
 # CMP0075 Include file check macros honor CMAKE_REQUIRED_LIBRARIES
 # For more information see: https://cmake.org/cmake/help/latest/policy/CMP0075.html
@@ -22,6 +22,12 @@ set(PACKAGE_LOGFILE "${CMAKE_INSTALL_FULL_LOCALSTATEDIR}/log/${PACKAGE}.log")
 execute_process(COMMAND echo -n ${VERSION}
                 COMMAND sed "-e" "s/^\\([0-9]*\\.[0-9]*\\).*/\\1/" "-e" "s/\\.\\([0-9]\\)\$/0\\1/" "-e" "s/\\.//"
                 OUTPUT_VARIABLE SCAN_VERSION)
+execute_process(COMMAND echo -n ${VERSION}
+                COMMAND sed "-e" "s/^\\([0-9]*\\.[0-9]*\\).*/\\1/" "-e" "s/^\\([0-9]*\\)\\..*$/\\1/"
+                OUTPUT_VARIABLE PACKAGE_VERSION_MAJOR)
+execute_process(COMMAND echo -n ${VERSION}
+                COMMAND sed "-e" "s/^\\([0-9]*\\.[0-9]*\\).*/\\1/" "-e" "s/^.*\\.\\([0-9]*\\)$/\\1/"
+                OUTPUT_VARIABLE PACKAGE_VERSION_MINOR)
 
 execute_process(COMMAND git describe --always
                 OUTPUT_VARIABLE REVISION
@@ -36,7 +42,9 @@ endif(NOT REVISION)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_FLAGS_DEBUG_INIT "-g -O0 -ggdb -fsanitize=address -fno-omit-frame-pointer")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-set(CMAKE_INSTALL_PREFIX "")
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+  set(CMAKE_INSTALL_PREFIX "" CACHE PATH "..." FORCE)
+endif()
 include(GNUInstallDirs)
 include(CheckFunctionExists)
 include(CheckCXXSourceRuns)
@@ -62,6 +70,7 @@ check_function_exists(pselect HAVE_PSELECT)
 check_function_exists(ppoll HAVE_PPOLL)
 check_include_file(linux/serial.h HAVE_LINUX_SERIAL -DHAVE_LINUX_SERIAL=1)
 check_include_file(dev/usb/uftdiio.h HAVE_FREEBSD_UFTDI -DHAVE_FREEBSD_UFTDI=1)
+
 check_function_exists(argp_parse HAVE_ARGP)
 if(NOT HAVE_ARGP)
   find_library(LIB_ARGP argp)
@@ -77,11 +86,13 @@ if(NOT coverage STREQUAL OFF)
   link_libraries(gcov)
   message(STATUS "coverage enabled")
 endif(NOT coverage STREQUAL OFF)
+
 option(contrib "disable inclusion of contributed sources." ON)
 if(contrib STREQUAL ON)
   set(HAVE_CONTRIB ON)
   message(STATUS "contrib enabled")
 endif(contrib STREQUAL ON)
+
 find_library(HAVE_MQTT mosquitto)
 if(HAVE_MQTT)
   option(mqtt "disable support for MQTT handling." ON)
@@ -90,7 +101,23 @@ if(HAVE_MQTT)
   else(mqtt STREQUAL ON)
     unset(HAVE_MQTT)
   endif(mqtt STREQUAL ON)
-endif(HAVE_MQTT) 
+endif(HAVE_MQTT)
+
+find_library(HAVE_SSL ssl)
+find_library(LIB_CRYPTO crypto)
+if(HAVE_SSL)
+  if(LIB_CRYPTO)
+    option(ssl "disable support for SSL." ON)
+    if(ssl STREQUAL ON)
+      message(STATUS "SSL enabled")
+      set(CMAKE_REQUIRED_LIBRARIES "${CMAKE_REQUIRED_LIBRARIES} ${HAVE_SSL} ${LIB_CRYPTO}")
+    else(ssl STREQUAL ON)
+      unset(HAVE_SSL)
+    endif(ssl STREQUAL ON)
+  else(LIB_CRYPTO)
+    message(FATAL_ERROR "crypto library not available")
+  endif(LIB_CRYPTO)
+endif(HAVE_SSL)
 
 check_cxx_source_runs("
 #include <stdint.h>
@@ -133,3 +160,13 @@ add_subdirectory(src/ebusd)
 add_subdirectory(src/lib/utils)
 add_subdirectory(src/lib/ebus)
 add_subdirectory(src/tools)
+
+if(EXISTS "${ROOT}/etc/debian_version")
+  install(FILES ${CMAKE_SOURCE_DIR}/contrib/debian/default/ebusd DESTINATION /etc/default/)
+  install(FILES ${CMAKE_SOURCE_DIR}/contrib/debian/init.d/ebusd DESTINATION /etc/init.d/)
+  install(FILES ${CMAKE_SOURCE_DIR}/contrib/debian/systemd/ebusd.service DESTINATION /lib/systemd/system/)
+endif()
+if(HAVE_MQTT)
+  FILE(GLOB MQTT_CFG_FILES "${CMAKE_SOURCE_DIR}/contrib/etc/ebusd/mqtt-*.cfg")
+  install(FILES ${MQTT_CFG_FILES} DESTINATION /etc/ebusd/)
+endif(HAVE_MQTT)

@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -142,16 +142,31 @@ class FileReader {
   static void tolower(string* str);
 
   /**
+   * Check the input string against the search pattern.
+   * @param input the input string to check.
+   * @param search the search pattern to match against. May contain alternatives separated by a "|".
+   * Each alternative may
+   * - start with "^" to match the beginning of the input,
+   * - end with "$" to match the end of the input,
+   * - contain a single "*" (between other characters) to match an arbitrary number of characters.
+   * @param ignoreCase true to ignore case differences.
+   * @param searchIsLower true if search is already known to be in lowercase only.
+   * @return true if the input string matches the search pattern.
+   */
+  static bool matches(const string& input, const string& search, bool ignoreCase = false, bool searchIsLower = false);
+
+  /**
    * Split the next line(s) from the @a istream into fields.
    * @param stream the @a istream to read from.
    * @param row the @a vector to which to add the fields. This will be empty for completely empty and comment lines.
    * @param lineNo the current line number (incremented with each line read).
    * @param hash optional pointer to a @a size_t value for combining the hash of the line with, or nullptr.
    * @param size optional pointer to a @a size_t value to add the trimmed line length to, or nullptr.
+   * @param clear whether to clear the fields before adding any.
    * @return true if there are more lines to read, false when there are no more lines left.
    */
   static bool splitFields(istream* stream, vector<string>* row, unsigned int* lineNo,
-      size_t* hash = nullptr, size_t* size = nullptr);
+      size_t* hash = nullptr, size_t* size = nullptr, bool clear = true);
 
   /**
    * Format the specified hash as 8 hex digits to the output stream.

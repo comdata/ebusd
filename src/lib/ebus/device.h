@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2015-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2015-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,6 +26,7 @@
 #include <netdb.h>
 #include <iostream>
 #include <fstream>
+#include <string>
 #include "lib/ebus/result.h"
 #include "lib/ebus/symbol.h"
 
@@ -50,7 +51,7 @@ namespace ebusd {
 #if defined(__CYGWIN__) || defined(_WIN32)
 #define HOST_LATENCY_MS 20
 #else
-#define HOST_LATENCY_MS 0
+#define HOST_LATENCY_MS 10
 #endif
 
 /** the arbitration state handled by @a Device. */
@@ -60,6 +61,7 @@ enum ArbitrationState {
   as_error,    //!< error while sending master address
   as_running,  //!< arbitration currently running (master address sent, waiting for reception)
   as_lost,     //!< arbitration lost
+  as_timeout,  //!< arbitration timed out
   as_won,      //!< arbitration won
 };
 
@@ -209,8 +211,17 @@ class Device {
    */
   void setListener(DeviceListener* listener) { m_listener = listener; }
 
+  /**
+   * Send a request for extra infos to enhanced device.
+   * @param infoId the ID of the info to request.
+   * @return @a RESULT_OK on success, or an error code otherwise.
+   */
   result_t requestEnhancedInfo(symbol_t infoId);
 
+  /**
+   * Retrieve/update all extra infos from an enhanced device.
+   * @return @a a string with the extra infos, or empty.
+   */
   string getEnhancedInfos();
 
  protected:
@@ -280,8 +291,9 @@ class Device {
   /** the arbitration master address to send when in arbitration, or @a SYN. */
   symbol_t m_arbitrationMaster;
 
-  /** true when in arbitration and the next received symbol needs to be checked against the sent master address. */
-  bool m_arbitrationCheck;
+  /** >0 when in arbitration and the next received symbol needs to be checked against the sent master address,
+   * incremented with each received SYN when arbitration was not performed as expected and needs to be stopped. */
+  size_t m_arbitrationCheck;
 
   /** the read buffer. */
   symbol_t* m_buffer;
@@ -334,10 +346,12 @@ class SerialDevice : public Device {
    * @param readOnly whether to allow read access to the device only.
    * @param initialSend whether to send an initial @a ESC symbol in @a open().
    * @param enhancedProto whether to use the ebusd enhanced protocol.
+   * @param enhancedHighSpeed whether to use ebusd enhanced protocol in high speed mode.
    */
   SerialDevice(const char* name, bool checkDevice, unsigned int extraLatency, bool readOnly, bool initialSend,
-      bool enhancedProto = false)
-    : Device(name, checkDevice, extraLatency, readOnly, initialSend, enhancedProto) {}
+               bool enhancedProto = false, bool enhancedHighSpeed = false)
+    : Device(name, checkDevice, extraLatency, readOnly, initialSend, enhancedProto), m_enhancedHighSpeed(enhancedHighSpeed) {
+  }
 
   // @copydoc
   result_t open() override;
@@ -352,6 +366,9 @@ class SerialDevice : public Device {
 
 
  private:
+  /** whether to use ebusd enhanced protocol in high speed mode. */
+  bool m_enhancedHighSpeed;
+
   /** the previous settings of the device for restoring. */
   termios m_oldSettings;
 };

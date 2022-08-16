@@ -1,0 +1,62 @@
+name: Prepare Release
+
+on:
+  release:
+    types: [ created ]
+  push:
+    branches: [ master ]
+    paths:
+      - 'VERSION'
+  workflow_dispatch:
+    inputs:
+      limitarch:
+        description: Limit to this architecture
+        required: false
+        type: choice
+        options:
+          - ''
+          - amd64
+          - '386'
+          - arm/v7
+          - arm64
+      limitimg:
+        description: Limit to this image
+        required: false
+        type: choice
+        options:
+          - ''
+          - bullseye
+          - buster
+          - stretch
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-latest
+    steps:
+      -
+        name: checkout
+        uses: actions/checkout@v2
+      -
+        name: set up QEMU
+        uses: docker/setup-qemu-action@v1
+      -
+        name: set up buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+        with:
+          buildkitd-flags: --debug
+      -
+        name: build
+        run: cd contrib/docker && ./update.sh all && ./build.sh deb
+        env:
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
+          UPLOAD_CREDENTIALS: ${{ secrets.UPLOAD_CREDENTIALS }}
+          LIMITARCH: ${{ github.event.inputs.limitarch }}
+          LIMITIMG: ${{ github.event.inputs.limitimg }}
+      -
+        name: archive
+        uses: actions/upload-artifact@v2
+        with:
+          name: debian packages
+          path: |
+            contrib/docker/out

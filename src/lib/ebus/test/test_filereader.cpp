@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -46,6 +46,50 @@ void verify(bool expectFailMatch, string type, string input,
       error = true;
   }
 }
+
+string matchInputs[] = {
+    // expected result (+=true, -=false), pattern, test strings
+    "+", "", "", ".", "*",
+    "+", "*", ".", "*", "**",
+    "+", "a", "hallo", "a",
+    "-", "a", "hi", "b",
+    "+", "^a", "aber",
+    "-", "^a", "reba",
+    "+", "^a*", "aber",
+    "-", "^a*", "reba",
+    "+", "^*a", "reba",
+    "-", "^*a", "rebx",
+    "+", "a$", "reba",
+    "-", "a$", "aber",
+    "+", "*a$", "reba",
+    "-", "*a$", "aber",
+    "+", "a*$", "aber",
+    "-", "a*$", "xber",
+    "+", "|.", "", ".", "*",
+    "+", ".|", "", ".", "*",
+    "+", "*|", ".", "*", "**",
+    "+", "a|z", "hallo", "a",
+    "-", "a|z", "hi", "b",
+    "+", "^a|z", "aber",
+    "-", "^a|z", "reba",
+    "+", "^a*|z", "aber",
+    "-", "^a*|z", "reba",
+    "+", "^*a|z", "reba",
+    "-", "^*a|z", "rebx",
+    "+", "a$|z", "reba",
+    "-", "a$|z", "aber",
+    "+", "*a$|z", "reba",
+    "-", "*a$|z", "aber",
+    "+", "a*$|z", "aber",
+    "-", "a*$|z", "xber",
+    "+", "a|*", "hi", "b",
+    "+", "^a|e*a", "reba",
+    "+", "^a*|r*a", "reba",
+    "+", "^*a|^r*x$", "rebx",
+    "+", "a$|^*$", "aber",
+    "+", "*a$|^*", "aber",
+    "+", "a*$|*$", "xber",
+};
 
 string resultlines[][3] = {
   {"col 1", "col 2", "col 3"},
@@ -202,6 +246,7 @@ int main(int argc, char** argv) {
         result = RESULT_ERR_NOTFOUND;
       } else {
         result = reader.readFromStream(stream, argv[argpos], time, false, nullptr, &errorDescription, false, &hash, &size);
+        delete stream;
       }
       cout << argv[argpos] << " ";
       if (result != RESULT_OK) {
@@ -214,6 +259,32 @@ int main(int argc, char** argv) {
     }
     return error ? 1 : 0;
   }
+
+  bool expectResult = true;
+  bool nextPattern = true;
+  string pattern = "";
+  for (auto& str : matchInputs) {
+    if (str == "+" || str == "-") {
+      expectResult = str == "+";
+      nextPattern = true;
+      continue;
+    }
+    if (nextPattern) {
+      pattern = str;
+      nextPattern = false;
+      continue;
+    }
+    bool result = FileReader::matches(str, pattern);
+    cout << "matches(\"" << str << "\", \"" << pattern << "\") = " << (result ? "true" : "false");
+    if (result==expectResult) {
+      cout << ": OK";
+    } else {
+      cout << ": wrong";
+      error = true;
+    }
+    cout << endl;
+  }
+
   baseLine = __LINE__+1;
   istringstream ifs(
     "col 1.en,col 1.de,col 2,col 3\n"

@@ -1,20 +1,14 @@
 add_definitions(-Wconversion -Wno-unused-parameter)
 
 set(libebus_a_SOURCES
-    result.cpp
-    result.h
-    symbol.cpp
-    symbol.h
-    filereader.h
-    filereader.cpp
-    datatype.cpp
-    datatype.h
-    data.cpp
-    data.h
-    device.cpp
-    device.h
-    message.cpp
-    message.h
+    result.h result.cpp
+    symbol.h symbol.cpp
+    filereader.h filereader.cpp
+    datatype.h datatype.cpp
+    data.h data.cpp
+    device.h device.cpp
+    message.h message.cpp
+    stringhelper.h stringhelper.cpp
 )
 
 if(HAVE_CONTRIB)

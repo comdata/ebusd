@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2016-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2016-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -39,6 +39,14 @@ using std::map;
 
 class UserInfo;
 class DataHandler;
+
+/** type for scan status. */
+enum scanStatus_t {
+  SCAN_STATUS_NONE = 0,      //!< no scan status (never started before)
+  SCAN_STATUS_RUNNING = 1,   //!< scan is currently running
+  SCAN_STATUS_FINISHED = 2,  //!< scan is finished
+};
+
 
 /**
  * Helper function for getting the argp definition for all known @a DataHandler instances.
@@ -110,7 +118,7 @@ class DataHandler {
   /**
    * Called to start the @a DataHandler.
    */
-  virtual void start() = 0;
+  virtual void startHandler() = 0;
 
   /**
    * Return whether this is a @a DataSink instance.
@@ -162,9 +170,9 @@ class DataSink : virtual public DataHandler {
 
   /**
    * Notify the sink of the latest scan status.
-   * @param scanStatus a string describing the scan status.
+   * @param scanStatus the scan status.
    */
-  virtual void notifyScanStatus(const string& scanStatus) {}
+  virtual void notifyScanStatus(scanStatus_t scanStatus) {}
 
  protected:
   /** the allowed access levels. */

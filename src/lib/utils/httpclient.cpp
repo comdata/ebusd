@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2018-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2018-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,13 @@
 #include <cstring>
 #include <cstdlib>
 #include <sstream>
+#include <csignal>
+#ifdef HAVE_SSL
+#if OPENSSL_VERSION_NUMBER < 0x10101000L
+#include <sys/stat.h>
+#endif
+#endif  // HAVE_SSL
+#include "lib/utils/log.h"
 
 namespace ebusd {
 
@@ -28,6 +35,236 @@ using std::ostringstream;
 using std::dec;
 using std::hex;
 
+#ifdef HAVE_SSL
+
+#if OPENSSL_VERSION_NUMBER < 0x10101000L
+//  default CA path
+#define DEFAULT_CAFILE "/etc/ssl/certs/ca-certificates.crt"
+
+//  default CA path
+#define DEFAULT_CAPATH "/etc/ssl/certs"
+#endif
+
+// the time slice to sleep between repeated SSL reads/writes
+#define SLEEP_NANOS 20000
+
+bool checkError(const char* call) {
+  unsigned long err = ERR_get_error();
+  if (err) {
+    const char *const str = ERR_reason_error_string(err);
+    logError(lf_network, "HTTP %s: %ld=%s", call, err, str);
+    return true;
+  }
+  return false;
+}
+
+bool isError(const char* call, bool result) {
+  if (checkError(call)) {
+    return true;
+  }
+  if (!result) {
+    logError(lf_network, "HTTP %s: invalid result", call);
+    return true;
+  }
+  return false;
+}
+
+bool isError(const char* call, long result, long expected) {
+  if (checkError(call)) {
+    return true;
+  }
+  if (result != expected) {
+    logError(lf_network, "HTTP %s: invalid result %d", call, result);
+    return true;
+  }
+  return false;
+}
+
+
+SSLSocket::~SSLSocket() {
+  BIO_free_all(m_bio);
+  if (m_ctx) {
+    SSL_CTX_free(m_ctx);
+  }
+}
+
+ssize_t SSLSocket::send(const char* data, size_t len) {
+  do {
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L
+    size_t part = 0;
+    int res = BIO_write_ex(m_bio, data, len, &part);
+    if (res == 1) {
+      return static_cast<signed>(part);
+    }
+#else
+    int res = BIO_write(m_bio, data, static_cast<int>(len));
+    if (res > 0) {
+      return static_cast<ssize_t>(res);
+    }
+#endif
+    if (!BIO_should_retry(m_bio)) {
+      if (isError("send", true)) {
+        return -1;
+      }
+      return 0;
+    }
+    usleep(SLEEP_NANOS);
+  } while (time(nullptr) < m_until);
+  return -1;  // timeout
+}
+
+ssize_t SSLSocket::recv(char* data, size_t len) {
+  do {
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L
+    size_t part = 0;
+    int res = BIO_read_ex(m_bio, data, len, &part);
+    if (res == 1) {
+      return static_cast<signed>(part);
+    }
+#else
+    int res = BIO_read(m_bio, data, static_cast<int>(len));
+    if (res > 0) {
+      return static_cast<ssize_t>(res);
+    }
+#endif
+    if (!BIO_should_retry(m_bio)) {
+      if (isError("recv", true)) {
+        return -1;
+      }
+      return 0;
+    }
+    usleep(SLEEP_NANOS);
+  } while (time(nullptr) < m_until);
+  return -1;  // timeout
+}
+
+bool SSLSocket::isValid() {
+  return time(nullptr) < m_until && !BIO_eof(m_bio);
+}
+
+SSLSocket* SSLSocket::connect(const string& host, const uint16_t& port, bool https, int timeout, const char* caFile,
+                              const char* caPath) {
+  BIO *bio = nullptr;
+  SSL_CTX *ctx = nullptr;
+  ostringstream ostr;
+  ostr << host << ':' << static_cast<unsigned>(port);
+  const string hostPort = ostr.str();
+  time_t until = time(nullptr) + (timeout <= 3 ? 3 : timeout);  // at least 3 seconds
+  if (!https) {
+    do {
+      bio = BIO_new_connect(hostPort.c_str());
+      if (isError("connect", bio)) {
+        break;
+      }
+      BIO_set_nbio(bio, 1);  // set non-blocking
+      return new SSLSocket(nullptr, bio, until);
+    } while (false);
+  } else {
+    SSL *ssl = nullptr;
+    do {
+      const SSL_METHOD *method = SSLv23_method();
+      if (isError("method", method)) {
+        break;
+      }
+      ctx = SSL_CTX_new(method);
+      if (isError("ctx_new", ctx)) {
+        break;
+      }
+      bool verifyPeer = !caFile || strcmp(caFile, "#")!=0;
+      SSL_CTX_set_verify(ctx, verifyPeer ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
+      if (verifyPeer) {
+#if OPENSSL_VERSION_NUMBER >= 0x10101000L
+        SSL_CTX_set_default_verify_paths(ctx);
+#else
+        struct stat stat_buf = {};
+        if (!caFile && stat(DEFAULT_CAFILE, &stat_buf) == 0) {
+          caFile = DEFAULT_CAFILE;  // use default CA file
+        }
+        if (!caPath && stat(DEFAULT_CAPATH, &stat_buf) == 0) {
+          caPath = DEFAULT_CAPATH;  // use default CA path
+        }
+#endif
+        if ((caFile || caPath) && isError("verify_loc", SSL_CTX_load_verify_locations(ctx, caFile, caPath), 1)) {
+          break;
+        }
+      }
+      const long flags = SSL_OP_ALL | SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION;
+      SSL_CTX_set_options(ctx, flags);
+      bio = BIO_new_ssl_connect(ctx);
+      if (isError("new_ssl_conn", bio)) {
+        break;
+      }
+      if (isError("conn_hostname", BIO_set_conn_hostname(bio, hostPort.c_str()), 1)) {
+        break;
+      }
+      BIO_set_nbio(bio, 1);  // set non-blocking
+      BIO_get_ssl(bio, &ssl);
+      if (isError("get_ssl", ssl)) {
+        break;
+      }
+      const char *hostname = host.c_str();
+      if (isError("tls_host", SSL_set_tlsext_host_name(ssl, hostname), 1)) {
+        break;
+      }
+      long res = BIO_do_connect(bio);
+      while (res <= 0 && BIO_should_retry(bio) && time(nullptr) < until) {
+        usleep(SLEEP_NANOS);
+        res = BIO_do_connect(bio);
+      }
+      if (isError("connect", res, 1)) {
+        break;
+      }
+      X509 *cert = SSL_get_peer_certificate(ssl);
+      if (cert) {
+        X509_free(cert);
+      }
+      if (isError("peer_cert", cert)) {
+        break;
+      }
+      if (verifyPeer && isError("verify", SSL_get_verify_result(ssl), X509_V_OK)) {
+        break;
+      }
+      // check hostname
+      X509_NAME *sname = X509_get_subject_name(cert);
+      if (isError("get_subject", sname)) {
+        break;
+      }
+      char peerName[64];
+      if (isError("subject name", X509_NAME_get_text_by_NID(sname, NID_commonName, peerName, sizeof(peerName)) > 0)) {
+        break;
+      }
+      if (isError("subject", strcmp(peerName, hostname), 0)) {
+        break;
+      }
+      return new SSLSocket(ctx, bio, until);
+    } while (false);
+  }
+  if (bio) {
+    BIO_free_all(bio);
+  }
+  if (ctx) {
+    SSL_CTX_free(ctx);
+  }
+  return nullptr;
+}
+
+bool HttpClient::s_initialized = false;
+
+void HttpClient::initialize() {
+  if (s_initialized) {
+    return;
+  }
+  s_initialized = true;
+  SSL_library_init();
+  SSL_load_error_strings();
+  signal(SIGPIPE, SIG_IGN);  // needed to avoid SIGPIPE when writing to a closed pipe
+}
+#else  // HAVE_SSL
+void HttpClient::initialize() {
+  // empty
+}
+#endif  // HAVE_SSL
+
 bool HttpClient::parseUrl(const string& url, string* proto, string* host, uint16_t* port, string* uri) {
   size_t hostPos = url.find("://");
   if (hostPos == string::npos) {
@@ -35,9 +272,16 @@ bool HttpClient::parseUrl(const string& url, string* proto, string* host, uint16
   }
   *proto = url.substr(0, hostPos);
   hostPos += 3;
+  bool isSsl = *proto == "https";
+#ifdef HAVE_SSL
+  if (!isSsl && *proto != "http") {
+    return false;
+  }
+#else
   if (*proto != "http") {
     return false;
   }
+#endif
   size_t pos = url.find('/', hostPos);
   if (pos == hostPos) {
     return false;
@@ -56,7 +300,7 @@ bool HttpClient::parseUrl(const string& url, string* proto, string* host, uint16
   if (pos == 0) {
     return false;
   }
-  *port = 80;
+  *port = isSsl ? 443 : 80;
   if (pos != string::npos) {
     char* strEnd = nullptr;
     unsigned long value = strtoul(host->c_str()+pos+1, &strEnd, 10);
@@ -69,9 +313,18 @@ bool HttpClient::parseUrl(const string& url, string* proto, string* host, uint16
   return true;
 }
 
-bool HttpClient::connect(const string& host, const uint16_t port, const string& userAgent, const int timeout) {
+bool HttpClient::connect(const string& host, const uint16_t port, bool https, const string& userAgent,
+                         const int timeout) {
   disconnect();
-  m_socket = m_client.connect(host, port, timeout);
+#ifdef HAVE_SSL
+  m_socket = SSLSocket::connect(host, port, https, timeout, m_caFile, m_caPath);
+  m_https = https;
+#else
+  if (https) {
+    return false;
+  }
+  m_socket = TCPSocket::connect(host, port, timeout);
+#endif
   if (!m_socket) {
     return false;
   }
@@ -87,7 +340,11 @@ bool HttpClient::reconnect() {
   if (m_host.empty() || !m_port) {
     return false;
   }
-  m_socket = m_client.connect(m_host, m_port, m_timeout);
+#ifdef HAVE_SSL
+  m_socket = SSLSocket::connect(m_host, m_port, m_https, m_timeout, m_caFile, m_caPath);
+#else
+  m_socket = TCPSocket::connect(m_host, m_port, m_timeout);
+#endif
   if (!m_socket) {
     return false;
   }
@@ -232,9 +489,9 @@ bool HttpClient::request(const string& method, const string& uri, const string& 
   return pos == length;
 }
 
-size_t HttpClient::readUntil(const string& delim, const size_t length, string* result) {
+size_t HttpClient::readUntil(const string& delim, size_t length, string* result) {
   if (!m_buffer) {
-    m_buffer = reinterpret_cast<char*>(malloc(1024+1)); // 1 extra for final terminator
+    m_buffer = reinterpret_cast<char*>(malloc(1024+1));  // 1 extra for final terminator
     if (!m_buffer) {
       return string::npos;
     }

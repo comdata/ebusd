@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -100,21 +100,22 @@ extern result_t loadDefinitionsFromConfigPath(FileReader* reader, const string& 
     map<string, string>* defaults, string* errorDescription, bool replace = false);
 
 
-Message::Message(const string& circuit, const string& level, const string& name,
+Message::Message(const string& filename, const string& circuit, const string& level, const string& name,
     bool isWrite, bool isPassive, const map<string, string>& attributes,
     symbol_t srcAddress, symbol_t dstAddress,
     const vector<symbol_t>& id,
     const DataField* data, bool deleteData,
     size_t pollPriority,
     Condition* condition)
-    : AttributedItem(name, attributes), m_circuit(circuit), m_level(level), m_isWrite(isWrite),
+    : AttributedItem(name, attributes),
+      m_filename(filename), m_circuit(circuit), m_level(level), m_isWrite(isWrite),
       m_isPassive(isPassive),
       m_srcAddress(srcAddress), m_dstAddress(dstAddress),
       m_id(id), m_key(createKey(id, isWrite, isPassive, srcAddress, dstAddress)),
       m_data(data), m_deleteData(deleteData),
       m_pollPriority(pollPriority),
       m_usedByCondition(false), m_isScanMessage(false), m_condition(condition),
-      m_lastUpdateTime(0), m_lastChangeTime(0), m_pollOrder(0), m_lastPollTime(0) {
+      m_dataHandlerState(0), m_lastUpdateTime(0), m_lastChangeTime(0), m_pollOrder(0), m_lastPollTime(0) {
   if (circuit == "scan") {
     setScanMessage();
     m_pollPriority = 0;
@@ -125,7 +126,9 @@ Message::Message(const string& circuit, const string& level, const string& name,
 Message::Message(const string& circuit, const string& level, const string& name,
     symbol_t pb, symbol_t sb,
     bool broadcast, const DataField* data, bool deleteData)
-    : AttributedItem(name), m_circuit(circuit), m_level(level), m_isWrite(broadcast),
+    : AttributedItem(name),
+      m_filename(""),
+      m_circuit(circuit), m_level(level), m_isWrite(broadcast),
       m_isPassive(false),
       m_srcAddress(SYN), m_dstAddress(broadcast ? BROADCAST : SYN),
       m_id({pb, sb}), m_key(createKey(pb, sb, broadcast)),
@@ -480,11 +483,11 @@ result_t Message::create(const string& filename, const DataFieldTemplates* templ
     }
     Message* message;
     if (chainIds.size() > 1) {
-      message = new ChainedMessage(useCircuit, level, name, isWrite, *row, srcAddress, dstAddress, id, chainIds,
-          chainLengths, data, index == 0, pollPriority, condition);
+      message = new ChainedMessage(filename, useCircuit, level, name, isWrite, *row, srcAddress, dstAddress, id,
+                                   chainIds, chainLengths, data, index == 0, pollPriority, condition);
     } else {
-      message = new Message(useCircuit, level, name, isWrite, isPassive, *row, srcAddress, dstAddress, id, data,
-          index == 0, pollPriority, condition);
+      message = new Message(filename, useCircuit, level, name, isWrite, isPassive, *row, srcAddress, dstAddress, id,
+                            data, index == 0, pollPriority, condition);
     }
     messages->push_back(message);
     index++;
@@ -521,7 +524,7 @@ bool Message::extractFieldNames(const string& str, bool checkAbbreviated, vector
 }
 
 Message* Message::derive(symbol_t dstAddress, symbol_t srcAddress, const string& circuit) const {
-  Message* result = new Message(circuit.length() == 0 ? m_circuit : circuit, m_level, m_name,
+  Message* result = new Message(m_filename, circuit.length() == 0 ? m_circuit : circuit, m_level, m_name,
     m_isWrite, m_isPassive, m_attributes,
     srcAddress == SYN ? m_srcAddress : srcAddress, dstAddress,
     m_id, m_data, false,
@@ -611,6 +614,9 @@ bool Message::setPollPriority(size_t priority) {
   size_t usePriority = priority;
   if (m_usedByCondition && (priority == 0 || priority > POLL_PRIORITY_CONDITION)) {
     usePriority = POLL_PRIORITY_CONDITION;
+  }
+  if (m_pollPriority != usePriority) {
+    time(&m_createTime);  // mis-use creation time for this update
   }
   bool ret = m_pollPriority == 0 && usePriority > 0;
   m_pollPriority = usePriority;
@@ -847,7 +853,8 @@ void Message::dumpHeader(const vector<string>* fieldNames, ostream* output) {
   }
 }
 
-void Message::dump(const vector<string>* fieldNames, bool withConditions, OutputFormat outputFormat, ostream* output) const {
+void Message::dump(const vector<string>* fieldNames, bool withConditions, OutputFormat outputFormat, ostream* output)
+                   const {
   // not to be used together with OF_JSON
   bool first = true;
   if (fieldNames == nullptr) {
@@ -874,7 +881,8 @@ void Message::dump(const vector<string>* fieldNames, bool withConditions, Output
   }
 }
 
-void Message::dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output) const {
+void Message::dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output)
+                        const {
   if (fieldName == "type") {
     if (withConditions && m_condition != nullptr) {
       m_condition->dump(false, output);
@@ -961,8 +969,9 @@ void Message::decodeJson(bool leadingSeparator, bool appendDirectionCondition, b
           << ",\n    \"passive\": " << (isPassive() ? "true" : "false")
           << ",\n    \"write\": " << (isWrite() ? "true" : "false");
   if (outputFormat & OF_ALL_ATTRS) {
+    *output << ",\n    \"filename\": \"" << m_filename << "\"";
     *output << ",\n    \"level\": \"" << getLevel() << "\"";
-    if (getPollPriority()>0) {
+    if (getPollPriority() > 0) {
       *output << ",\n    \"pollprio\": " << setw(0) << dec << getPollPriority();
     }
     if (isConditional()) {
@@ -1018,8 +1027,16 @@ void Message::decodeJson(bool leadingSeparator, bool appendDirectionCondition, b
   *output << "\n   }";
 }
 
+bool Message::setDataHandlerState(int state, bool addBits) {
+  if (addBits ? state == (m_dataHandlerState&state) : state == m_dataHandlerState) {
+    return false;
+  }
+  m_dataHandlerState = addBits ? m_dataHandlerState|state : state;
+  return true;
+}
 
-ChainedMessage::ChainedMessage(const string& circuit, const string& level, const string& name,
+
+ChainedMessage::ChainedMessage(const string& filename, const string& circuit, const string& level, const string& name,
     bool isWrite, const map<string, string>& attributes,
     symbol_t srcAddress, symbol_t dstAddress,
     const vector<symbol_t>& id,
@@ -1027,7 +1044,7 @@ ChainedMessage::ChainedMessage(const string& circuit, const string& level, const
     const DataField* data, bool deleteData,
     size_t pollPriority,
     Condition* condition)
-    : Message(circuit, level, name, isWrite, false, attributes,
+    : Message(filename, circuit, level, name, isWrite, false, attributes,
       srcAddress, dstAddress, id,
       data, deleteData, pollPriority, condition),
       m_ids(ids), m_lengths(lengths),
@@ -1057,7 +1074,7 @@ ChainedMessage::~ChainedMessage() {
 }
 
 Message* ChainedMessage::derive(symbol_t dstAddress, symbol_t srcAddress, const string& circuit) const {
-  ChainedMessage* result = new ChainedMessage(circuit.length() == 0 ? m_circuit : circuit, m_level, m_name,
+  ChainedMessage* result = new ChainedMessage(m_filename, circuit.length() == 0 ? m_circuit : circuit, m_level, m_name,
     m_isWrite, m_attributes,
     srcAddress == SYN ? m_srcAddress : srcAddress, dstAddress,
     m_id, m_ids, m_lengths, m_data, false,
@@ -1263,7 +1280,8 @@ result_t ChainedMessage::combineLastParts() {
   return result;
 }
 
-void ChainedMessage::dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output) const {
+void ChainedMessage::dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output)
+                               const {
   if (fieldName != "id") {
     Message::dumpField(fieldName, withConditions, outputFormat, output);
     return;
@@ -2149,11 +2167,16 @@ result_t MessageMap::readConditions(const string& filename, string* types, strin
 
 bool MessageMap::extractDefaultsFromFilename(const string& filename, map<string, string>* defaults,
     symbol_t* destAddress, unsigned int* software, unsigned int* hardware) const {
+  // check filename to match (glob style with optionals in brackets):
+  // ZZ.[ID.][*.][CIRCUIT.[?.]][*.][HW????.][*.][SW????.][*.]csv
+  // ZZ is the address, ID is the 5 char identifier (reduced by trailing 0 one by one for finding a match), CIRCUIT is
+  // the optional circuit name, ? behind the circuit name is the circuit number suffix (when having more than one of
+  // these), ???? behind HW is the hardware version, ???? behind SW is the software version
   string ident, circuit, suffix;
   unsigned int sw = UINT_MAX, hw = UINT_MAX;
   string remain = filename;
   if (remain.length() > 4 && remain.substr(remain.length()-4) == ".csv") {
-    remain = remain.substr(0, remain.length()-3);  // including trailing "."
+    remain = remain.substr(0, remain.length()-3);  // keep trailing "."
   }
   size_t pos = remain.find('.');
   if (pos != 2) {
@@ -2170,8 +2193,8 @@ bool MessageMap::extractDefaultsFromFilename(const string& filename, map<string,
   }
   remain.erase(0, pos);
   if (remain.length() > 1) {
-    pos = remain.rfind(".SW");  // check for ".SWxxxx."
-    if (pos != string::npos && remain.find(".", pos+1) == pos+7) {
+    pos = remain.rfind(".SW");  // check for ".SWxxxx." from the end
+    if (pos != string::npos && remain.find('.', pos+1) == pos+7) {
       sw = parseInt(remain.substr(pos+3, 4).c_str(), 10, 0, 9999, &result);
       if (result != RESULT_OK) {
         return false;  // invalid "SWxxxx"
@@ -2183,8 +2206,8 @@ bool MessageMap::extractDefaultsFromFilename(const string& filename, map<string,
     *software = sw;
   }
   if (remain.length() > 1) {
-    pos = remain.rfind(".HW");  // check for ".HWxxxx."
-    if (pos != string::npos && remain.find(".", pos+1) == pos+7) {
+    pos = remain.rfind(".HW");  // check for ".HWxxxx." from the end
+    if (pos != string::npos && remain.find('.', pos+1) == pos+7) {
       hw = parseInt(remain.substr(pos+3, 4).c_str(), 10, 0, 9999, &result);
       if (result != RESULT_OK) {
         return false;  // invalid "HWxxxx"
@@ -2794,7 +2817,7 @@ void MessageMap::dump(bool withConditions, OutputFormat outputFormat, ostream* o
   bool first = true;
   bool isJson = (outputFormat & OF_JSON) != 0;
   if (isJson) {
-    *output << "{";
+    *output << (m_addAll ? "[" : "}");
   } else {
     Message::dumpHeader(nullptr, output);
   }
@@ -2810,16 +2833,19 @@ void MessageMap::dump(bool withConditions, OutputFormat outputFormat, ostream* o
         if (!message) {
           continue;
         }
-        bool wasFirst = first;
         if (first) {
           first = false;
+        } else if (isJson) {
+          *output << ",\n";
         } else {
           *output << endl;
         }
         if (isJson) {
           ostringstream str;
-          message->decodeJson(!wasFirst, true, false, false, outputFormat, &str);
-          *output << str.str();
+          message->decodeJson(false, false, false, false, outputFormat, &str);
+          string add = str.str();
+          size_t pos = add.find('{');
+          *output << "   {\n    \"circuit\": \"" << message->getCircuit() << "\", " << add.substr(pos+1);
         } else {
           message->dump(nullptr, withConditions, outputFormat, output);
         }
@@ -2845,7 +2871,7 @@ void MessageMap::dump(bool withConditions, OutputFormat outputFormat, ostream* o
     }
   }
   if (isJson) {
-    *output << "}" << endl;
+    *output << (m_addAll ? "]" : "}") << endl;
   } else {
     if (!first) {
       *output << endl;

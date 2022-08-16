@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -130,8 +130,8 @@ void AttributedItem::mergeAttributes(map<string, string>* attributes) const {
   }
 }
 
-void AttributedItem::dumpAttribute(bool prependFieldSeparator, OutputFormat outputFormat, const string& name, ostream* output)
-    const {
+void AttributedItem::dumpAttribute(bool prependFieldSeparator, OutputFormat outputFormat, const string& name,
+                                   ostream* output) const {
   if (outputFormat & OF_JSON) {
     appendJson(prependFieldSeparator, name, getAttribute(name), false, output);
   } else {
@@ -708,16 +708,16 @@ result_t ValueListDataField::derive(const string& name, PartType partType, int d
   if (!m_dataType->isNumeric()) {
     return RESULT_ERR_INVALID_ARG;
   }
+  const NumberDataType* num = reinterpret_cast<const NumberDataType*>(m_dataType);
   if (!values.empty()) {
-    const NumberDataType* num = reinterpret_cast<const NumberDataType*>(m_dataType);
     if (values.begin()->first < num->getMinValue() || values.rbegin()->first > num->getMaxValue()) {
       return RESULT_ERR_INVALID_ARG;  // cannot use divisor != 1 for value list field
     }
     fields->push_back(new ValueListDataField(useName, *attributes,
-        reinterpret_cast<const NumberDataType*>(m_dataType), partType, m_length, values));
+        num, partType, m_length, values));
   } else {
     fields->push_back(new ValueListDataField(useName, *attributes,
-        reinterpret_cast<const NumberDataType*>(m_dataType), partType, m_length, m_values));
+        num, partType, m_length, m_values));
   }
   return RESULT_OK;
 }
@@ -971,7 +971,7 @@ size_t DataFieldSet::getCount(PartType partType, const char* fieldName) const {
 }
 
 string DataFieldSet::getName(ssize_t fieldIndex) const {
-  if (fieldIndex < (ssize_t)m_ignoredCount) {
+  if (fieldIndex < 0) {
     return m_name;
   }
   if ((size_t)fieldIndex + m_ignoredCount >= m_fields.size()) {
@@ -987,7 +987,7 @@ string DataFieldSet::getName(ssize_t fieldIndex) const {
         continue;
       }
       remain--;
-      if (remain == 0) {
+      if (remain < 0) {
         return field->getName(-1);
       }
     }
@@ -998,10 +998,7 @@ string DataFieldSet::getName(ssize_t fieldIndex) const {
 }
 
 const SingleDataField* DataFieldSet::getField(ssize_t fieldIndex) const {
-  if (fieldIndex < (ssize_t)m_ignoredCount) {
-    return nullptr;
-  }
-  if ((size_t)fieldIndex + m_ignoredCount >= m_fields.size()) {
+  if (fieldIndex < 0 || (size_t)fieldIndex + m_ignoredCount >= m_fields.size()) {
     return nullptr;
   }
   if (m_ignoredCount == 0) {
@@ -1013,7 +1010,7 @@ const SingleDataField* DataFieldSet::getField(ssize_t fieldIndex) const {
       continue;
     }
     remain--;
-    if (remain == 0) {
+    if (remain < 0) {
       return field;
     }
   }

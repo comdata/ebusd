@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>, Roland Jax 2012-2014 <ebusd@liwest.at>
+ * Copyright (C) 2014-2022 John Baier <ebusd@ebusd.eu>, Roland Jax 2012-2014 <ebusd@liwest.at>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,8 @@
 #ifdef HAVE_PPOLL
 #  include <poll.h>
 #endif
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <cstring>
 #include "lib/utils/log.h"
 
@@ -184,8 +186,7 @@ void Connection::run() {
   }
 
   if (m_socket) {
-    delete m_socket;
-    m_socket = nullptr;
+    shutdown(sockFD, SHUT_RD);
   }
   time(&m_endedAt);
   logInfo(lf_network, "[%05d] connection closed", getID());
@@ -329,9 +330,9 @@ void Network::run() {
         continue;
       }
       Connection* connection = new Connection(socket, isHttp, m_netQueue);
+      string ip = socket->getIP();
       connection->start("connection");
       m_connections.push_back(connection);
-      string ip = socket->getIP();
       logInfo(lf_network, "[%05d] %s connection opened %s", connection->getID(), isHttp ? "HTTP" : "client",
           ip.c_str());
     }

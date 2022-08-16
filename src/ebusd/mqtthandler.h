@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2016-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2016-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,10 +27,11 @@
 #include "ebusd/datahandler.h"
 #include "ebusd/bushandler.h"
 #include "lib/ebus/message.h"
+#include "lib/ebus/stringhelper.h"
 
 namespace ebusd {
 
-/** @file ebusd/mqtthandler.h
+/** \file ebusd/mqtthandler.h
  * A data handler enabling MQTT support via mosquitto.
  */
 
@@ -55,6 +56,7 @@ const struct argp_child* mqtthandler_getargs();
 bool mqtthandler_register(UserInfo* userInfo, BusHandler* busHandler, MessageMap* messages,
     list<DataHandler*>* handlers);
 
+
 /**
  * The main class supporting MQTT data handling.
  */
@@ -68,13 +70,14 @@ class MqttHandler : public DataSink, public DataSource, public WaitThread {
    */
   MqttHandler(UserInfo* userInfo, BusHandler* busHandler, MessageMap* messages);
 
+ public:
   /**
    * Destructor.
    */
   virtual ~MqttHandler();
 
   // @copydoc
-  void start() override;
+  void startHandler() override;
 
   /**
    * Notify the handler of a (re-)established connection to the broker.
@@ -92,7 +95,7 @@ class MqttHandler : public DataSink, public DataSource, public WaitThread {
   void notifyUpdateCheckResult(const string& checkResult) override;
 
   // @copydoc
-  void notifyScanStatus(const string& scanStatus) override;
+  void notifyScanStatus(scanStatus_t scanStatus) override;
 
  protected:
   // @copydoc
@@ -100,6 +103,25 @@ class MqttHandler : public DataSink, public DataSource, public WaitThread {
 
 
  private:
+  /**
+   * Publish a definition topic as specified in the given values.
+   * @param values the values with the message specification.
+   * @param prefix the prefix for picking the message specification from the values (before "topic", "payload", and
+   * "retain").
+   * @param topic optional data topic (not the definition topic) to set before building the topic/payload, or empty.
+   * @param circuit optional circuit to set before building the topic/payload, or empty.
+   * @param name optional name to set before building the topic/payload, or empty.
+   * @param fallbackPrefix optional fallback prefix to use when topic/payload/retain with prefix above is not defined.
+   */
+  void publishDefinition(StringReplacers values, const string& prefix, const string& topic,
+                         const string& circuit, const string& name, const string& fallbackPrefix);
+
+  /**
+   * Publish a definition topic as specified in the given values.
+   * @param values the values with the message specification.
+   */
+  void publishDefinition(const StringReplacers& values);
+
   /**
    * Called regularly to handle MQTT traffic.
    * @param allowReconnect true when reconnecting to the broker is allowed.
@@ -141,14 +163,38 @@ class MqttHandler : public DataSink, public DataSource, public WaitThread {
   /** the @a MessageMap instance. */
   MessageMap* m_messages;
 
-  /** the global topic prefix. */
-  string m_globalTopic;
+  /** the global topic replacer. */
+  StringReplacer m_globalTopic;
 
   /** the topic to subscribe to. */
   string m_subscribeTopic;
 
+  /** whether to use a single topic for all messages. */
+  bool m_staticTopic;
+
   /** whether to publish a separate topic for each message field. */
   bool m_publishByField;
+
+  /** the @a StringReplacers from the integration file. */
+  StringReplacers m_replacers;
+
+  /** whether the @a m_replacers includes the definition_topic. */
+  bool m_hasDefinitionTopic;
+
+  /** whether the @a m_replacers uses the fields_payload variable. */
+  bool m_hasDefinitionFieldsPayload;
+
+  /** map of type name to a list of pairs of wildcard string and mapped value. */
+  map<string, vector<std::pair<string, string>>> m_typeSwitches;
+
+  /** the subscribed configuration restart topic, or empty. */
+  string m_subscribeConfigRestartTopic;
+
+  /** the expected payload of the subscribed configuration restart topic, or empty for any. */
+  string m_subscribeConfigRestartPayload;
+
+  /** the last system time when the message definitions were published. */
+  time_t m_definitionsSince;
 
   /** the mosquitto structure if initialized, or nullptr. */
   struct mosquitto* m_mosquitto;
@@ -163,7 +209,7 @@ class MqttHandler : public DataSink, public DataSource, public WaitThread {
   string m_lastUpdateCheckResult;
 
   /** the last scan status. */
-  string m_lastScanStatus;
+  scanStatus_t m_lastScanStatus;
 
   /** the last system time when a communication error was logged. */
   time_t m_lastErrorLogTime;

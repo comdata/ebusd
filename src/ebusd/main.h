@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -41,17 +41,19 @@ struct options {
   bool initialSend;  //!< send an initial escape symbol after connecting device
   unsigned int extraLatency;  //!< extra transfer latency in ms [0 for USB, 10 for IP]
 
-  const char* configPath;  //!< path to CSV configuration files [http://ebusd.eu/config/]
-  const char* overridePath;  //!< path to CSV configuration files to override the main files with
   bool scanConfig;  //!< pick configuration files matching initial scan
   /** the initial address to scan for scanconfig
    * (@a ESC=none, 0xfe=broadcast ident, @a SYN=full scan, else: single slave address). */
   symbol_t initialScan;
   const char* preferLanguage;  //!< preferred language in configuration files
   bool checkConfig;  //!< check config files, then stop
-  OutputFormat dumpConfig;   //!< dump config files, then stop
+  OutputFormat dumpConfig;  //!< dump config files, then stop
+  const char* dumpConfigTo;  //!< file to dump config to
   unsigned int pollInterval;  //!< poll interval in seconds, 0 to disable [5]
   bool injectMessages;  //!< inject remaining arguments as already seen messages
+  bool stopAfterInject;  //!< only inject messages once, then stop
+  const char* caFile;  //!< the CA file to use (uses defaults if neither caFile nor caPath are set), or "#" for insecure
+  const char* caPath;  //!< the path with CA files to use (uses defaults if neither caFile nor caPath are set)
 
   symbol_t address;  //!< own bus address [31]
   bool answer;  //!< answer to requests from other masters

@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,12 +34,67 @@
 namespace ebusd {
 
 using std::dec;
+using std::defaultfloat;
 using std::hex;
 using std::fixed;
 using std::setfill;
 using std::setprecision;
 using std::setw;
 using std::endl;
+
+
+float uintToFloat(unsigned int value, bool negative) {
+#ifdef HAVE_DIRECT_FLOAT_FORMAT
+#  if HAVE_DIRECT_FLOAT_FORMAT == 2
+  value = __builtin_bswap32(value);
+#  endif
+  auto* pval = reinterpret_cast<symbol_t*>(&value);
+  return *reinterpret_cast<float*>(pval);
+#else
+  int exp = (value >> 23) & 0xff;  // 8 bits, signed
+  if (exp == 0) {
+    return 0.0;
+  }
+  exp -= 127;
+  unsigned int sig = value & ((1 << 23) - 1);
+  float val = (1.0f + static_cast<float>(sig / exp2(23))) * static_cast<float>(exp2(exp));
+  if (negative) {
+    return -val;
+  }
+  return val;
+#endif
+}
+
+uint32_t floatToUint(float val) {
+#ifdef HAVE_DIRECT_FLOAT_FORMAT
+  auto* pval = reinterpret_cast<symbol_t*>(&val);
+  uint32_t value = *reinterpret_cast<uint32_t*>(pval);
+#  if HAVE_DIRECT_FLOAT_FORMAT == 2
+  return __builtin_bswap32(value);
+#  endif
+  return value;
+#else
+  if (val != 0) {
+    bool negative = val < 0;
+    if (negative) {
+      val = -val;
+    }
+    int exp = ilogb(val);
+    if (exp < -126 || exp > 127) {
+      return 0xffffffff;  // invalid value (NaN)
+    }
+    val = scalbln(val, -exp) - 1.0;
+    unsigned int sig = (unsigned int)(val * exp2(23));
+    exp += 127;
+    uint32_t value = (exp << 23) | sig;
+    if (negative) {
+      return value | 0x80000000;
+    }
+    return value;
+  }
+  return 0;
+#endif
+}
 
 
 bool DataType::dump(OutputFormat outputFormat, size_t length, bool appendDivisor, ostream* output) const {
@@ -49,6 +104,7 @@ bool DataType::dump(OutputFormat outputFormat, size_t length, bool appendDivisor
     if (outputFormat & OF_ALL_ATTRS) {
       *output << ", \"isadjustable\": " << (isAdjustableLength() ? "true" : "false");
       *output << ", \"isignored\": " << (isIgnored() ? "true" : "false");
+      *output << ", \"isreverse\": " << (hasFlag(REV) ? "true" : "false");
     }
     *output << ", \"length\": ";
     if (isAdjustableLength() && length == REMAIN_LEN) {
@@ -358,8 +414,8 @@ result_t DateTimeDataType::readSymbols(size_t offset, size_t length, const Symbo
           return RESULT_ERR_INVALID_POS;
         }
         // number of minutes since 01.01.2009
-        minutes |= symbol*(1<<(8*i));
-        if (i<3) {
+        minutes |= symbol*(1 << (8*i));
+        if (i < 3) {
           break;
         }
         int mjd = static_cast<int>(minutes/(24*60)) + 54832;  // 01.01.2009
@@ -423,7 +479,7 @@ result_t DateTimeDataType::writeSymbols(size_t offset, size_t length, istringstr
         if (length == 4 && i == 2 && !m_hasTime) {
           continue;  // skip weekday in between
         }
-        if (input->eof() || !getline(*input, token, m_hasTime && i==2 ? ' ' : '.')) {
+        if (input->eof() || !getline(*input, token, m_hasTime && i == 2 ? ' ' : '.')) {
           return RESULT_ERR_EOF;  // incomplete
         }
         if (!hasFlag(REQ) && token == NULL_VALUE) {
@@ -463,7 +519,7 @@ result_t DateTimeDataType::writeSymbols(size_t offset, size_t length, istringstr
               index = start + incr;
               i = 1;
               type = 1;
-              skip = true; // switch to second pass for parsing the time
+              skip = true;  // switch to second pass for parsing the time
             } else {
               // calculate local week day
               int daysSinceSunday = (mjd + 3) % 7;  // Sun=0
@@ -545,7 +601,7 @@ result_t DateTimeDataType::writeSymbols(size_t offset, size_t length, istringstr
         }
         break;
 
-      case 3: // date and time in store phase
+      case 3:  // date and time in store phase
         value = lastLast & 0xff;
         last = lastLast >> 8;
         break;
@@ -674,6 +730,10 @@ result_t NumberDataType::derive(int divisor, size_t bitCount, const NumberDataTy
   return RESULT_OK;
 }
 
+result_t NumberDataType::getMinMax(bool getMax, const OutputFormat outputFormat, ostream* output) const {
+  return readFromRawValue(getMax ? m_maxValue : m_minValue, outputFormat, output);
+}
+
 result_t NumberDataType::readRawValue(size_t offset, size_t length, const SymbolString& input,
                                       unsigned int* value) const {
   size_t start = 0, count = length;
@@ -725,13 +785,20 @@ result_t NumberDataType::readRawValue(size_t offset, size_t length, const Symbol
 result_t NumberDataType::readSymbols(size_t offset, size_t length, const SymbolString& input,
                                      OutputFormat outputFormat, ostream* output) const {
   unsigned int value = 0;
-  int signedValue;
 
   result_t result = readRawValue(offset, length, input, &value);
   if (result != RESULT_OK) {
     return result;
   }
-  *output << setw(0) << dec;  // initialize output
+  return readFromRawValue(value, outputFormat, output);
+}
+
+result_t NumberDataType::readFromRawValue(unsigned int value,
+                                          OutputFormat outputFormat, ostream* output) const {
+  size_t length = (m_bitCount < 8) ? 1 : (m_bitCount/8);
+  int signedValue;
+  // initialize output
+  *output << setw(0) << std::resetiosflags(output->flags()) << dec << std::skipws << setprecision(6);
 
   if (!hasFlag(REQ) && value == m_replacement) {
     if (outputFormat & OF_JSON) {
@@ -759,26 +826,7 @@ result_t NumberDataType::readSymbols(size_t offset, size_t length, const SymbolS
   }
   if (m_bitCount == 32) {
     if (hasFlag(EXP)) {  // IEEE 754 binary32
-      float val;
-#ifdef HAVE_DIRECT_FLOAT_FORMAT
-#  if HAVE_DIRECT_FLOAT_FORMAT == 2
-      value = __builtin_bswap32(value);
-#  endif
-      symbol_t* pval = reinterpret_cast<symbol_t*>(&value);
-      val = *reinterpret_cast<float*>(pval);
-#else
-      int exp = (value >> 23) & 0xff;  // 8 bits, signed
-      if (exp == 0) {
-        val = 0.0;
-      } else {
-        exp -= 127;
-        unsigned int sig = value & ((1 << 23) - 1);
-        val = (1.0f + static_cast<float>(sig / exp2(23))) * static_cast<float>(exp2(exp));
-        if (negative) {
-          val = -val;
-        }
-      }
-#endif
+      float val = uintToFloat(value, negative);
       if (val != val) {  // !isnan(val)
         if (outputFormat & OF_JSON) {
           *output << "null";
@@ -905,33 +953,10 @@ result_t NumberDataType::writeSymbols(size_t offset, size_t length, istringstrea
     } else if (m_divisor > 1) {
       dvalue *= m_divisor;
     }
-#ifdef HAVE_DIRECT_FLOAT_FORMAT
-    float val = static_cast<float>(dvalue);
-    symbol_t* pval = reinterpret_cast<symbol_t*>(&val);
-    value = *reinterpret_cast<int32_t*>(pval);
-#  if HAVE_DIRECT_FLOAT_FORMAT == 2
-    value = __builtin_bswap32(value);
-#  endif
-#else
-    value = 0;
-    if (dvalue != 0) {
-      bool negative = dvalue < 0;
-      if (negative) {
-        dvalue = -dvalue;
-      }
-      int exp = ilogb(dvalue);
-      if (exp < -126 || exp > 127) {
-        return RESULT_ERR_INVALID_NUM;  // invalid value
-      }
-      dvalue = scalbln(dvalue, -exp) - 1.0;
-      unsigned int sig = (unsigned int)(dvalue * exp2(23));
-      exp += 127;
-      value = (exp << 23) | sig;
-      if (negative) {
-        value |= 0x80000000;
-      }
+    value = floatToUint(static_cast<float>(dvalue));
+    if (value == 0xffffffff) {
+      return RESULT_ERR_INVALID_NUM;
     }
-#endif
   } else {
     const char* str = inputStr.c_str();
     char* strEnd = nullptr;
@@ -1119,7 +1144,7 @@ DataTypeList* DataTypeList::getInstance() {
 void DataTypeList::dump(OutputFormat outputFormat, bool appendDivisor, ostream* output) const {
   bool json = outputFormat & OF_JSON;
   string sep = "\n";
-  for (const auto &it: m_typesById) {
+  for (const auto &it : m_typesById) {
     const DataType *dataType = it.second;
     if (dataType->hasFlag(DUP)) {
       continue;

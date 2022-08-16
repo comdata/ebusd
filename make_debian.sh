@@ -1,6 +1,6 @@
 #!/bin/sh
 # ebusd - daemon for communication with eBUS heating systems.
-# Copyright (C) 2014-2017 John Baier <ebusd@ebusd.eu>
+# Copyright (C) 2014-2022 John Baier <ebusd@ebusd.eu>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -58,7 +58,7 @@ fi
 
 echo
 echo "*************"
-echo " build"
+echo " build $ARCH"
 echo "*************"
 echo
 if [ -n "$reusebuilddir" ] || [ -z "$keepbuilddir" ]; then
@@ -66,16 +66,23 @@ if [ -n "$reusebuilddir" ] || [ -z "$keepbuilddir" ]; then
 fi
 make DESTDIR="$PWD/$RELEASE" install-strip || exit 1
 extralibs=
+mqtt=
 ldd $RELEASE/usr/bin/ebusd | egrep -q libmosquitto.so.0
 if [ $? -eq 0 ]; then
   extralibs=', libmosquitto0'
   PACKAGE="${PACKAGE}_mqtt0"
+  mqtt=1
 else
   ldd $RELEASE/usr/bin/ebusd | egrep -q libmosquitto.so.1
   if [ $? -eq 0 ]; then
     extralibs=', libmosquitto1'
     PACKAGE="${PACKAGE}_mqtt1"
+    mqtt=1
   fi
+fi
+ldd $RELEASE/usr/bin/ebusd | egrep -q libssl.so.1.1
+if [ $? -eq 0 ]; then
+  extralibs="$extralibs, libssl1.1 (>= 1.1.0), ca-certificates"
 fi
 
 if [ -n "$RUNTEST" ]; then
@@ -85,13 +92,19 @@ if [ -n "$RUNTEST" ]; then
   echo "*************"
   echo
   testdie() {
-    echo "test failed"
+    echo "test failed: $1"
+    cat test.txt || true
     exit 1
   }
-  ($RELEASE/usr/bin/ebusd -f -c src/lib/ebus/test -d /dev/null --checkconfig -i 10fe0900040000803e/ | egrep "received update-read broadcast test QQ=10: 0\.25$") || testdie
-  if [ "$RUNTEST" == "full" ]; then
-    (cd src/lib/ebus/test && make >/dev/null && ./test_filereader && ./test_data && ./test_message && ./test_symbol) || testdie
+  if [ "$RUNTEST" = "full" ]; then
+    (cd src/lib/ebus/test && make test_filereader && ./test_filereader) > test.txt || testdie "filereader"
+    (cd src/lib/ebus/test && make test_data && ./test_data) > test.txt || testdie "data"
+    (cd src/lib/ebus/test && make test_message && ./test_message) > test.txt || testdie "message"
+    (cd src/lib/ebus/test && make test_symbol && ./test_symbol) > test.txt || testdie "symbol"
   fi
+  # note: this can't run on file system base when using qemu for arm 32bit and host is 64bit due to glibc readdir() inode 32 bit values (see https://bugs.launchpad.net/qemu/+bug/1805913), thus using test end point instead:
+  ("$RELEASE/usr/bin/ebusd" -f -s -c https://cfg.ebusd.eu/test -d /dev/null --log=all:debug --inject=stop 10fe0900040000803e/ > test.txt) || testdie "float conversion"
+  egrep "received update-read broadcast test QQ=10: 0\.25$" test.txt || testdie "float result"
 fi
 
 echo
@@ -99,12 +112,7 @@ echo "*************"
 echo " pack"
 echo "*************"
 echo
-mkdir -p $RELEASE/DEBIAN $RELEASE/etc/default $RELEASE/etc/logrotate.d || exit 1
-mkdir -p $RELEASE/lib/systemd/system || exit 1
-cp contrib/debian/systemd/ebusd.service $RELEASE/lib/systemd/system/ebusd.service || exit 1
-mkdir -p $RELEASE/etc/init.d || exit 1
-cp contrib/debian/init.d/ebusd $RELEASE/etc/init.d/ebusd || exit 1
-cp contrib/debian/default/ebusd $RELEASE/etc/default/ebusd || exit 1
+mkdir -p $RELEASE/DEBIAN $RELEASE/etc/logrotate.d || exit 1
 cp contrib/etc/logrotate.d/ebusd $RELEASE/etc/logrotate.d/ || exit 1
 cp ChangeLog.md $RELEASE/DEBIAN/changelog || exit 1
 cat <<EOF > $RELEASE/DEBIAN/control
@@ -129,6 +137,13 @@ cat <<EOF > $RELEASE/DEBIAN/dirs
 /lib/systemd/system
 /usr/bin
 EOF
+cat <<EOF > $RELEASE/DEBIAN/conffiles
+/etc/default/ebusd
+EOF
+if ls $RELEASE/etc/ebusd/* >/dev/null 2>&1 ; then
+  echo '/etc/ebusd' >> $RELEASE/DEBIAN/dirs
+  (cd $RELEASE && for i in etc/ebusd/*; do echo "/$i"; done) >> $RELEASE/DEBIAN/conffiles
+fi
 cat <<EOF > $RELEASE/DEBIAN/postinst
 #!/bin/sh
 if [ -d /run/systemd/system ]; then

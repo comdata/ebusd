@@ -95,6 +95,8 @@ These are the predefined symbols as used above.
  * STARTED 0x2
  * INFO 0x3
  * FAILED 0xa
+ * ERROR_EBUS 0xb
+ * ERROR_HOST 0xc
 
 ### Error codes (from interface to ebusd)
  * ERR_FRAMING 0x00: framing error
@@ -111,9 +113,11 @@ These are the predefined symbols as used above.
 The first level below is the `info_id` value and the second level describes the response data byte sequence.
 The first byte transferred in response is always the number of data bytes to be transferred (excluding the length itself).
  * 0x00: version  
-   * `length`: =2
+   * `length`: =5 (2 before 20220220)
    * `version`: version number
    * `features`: feature bits
+   * `checksum_H` `checksum_L`: checksum (since 20220220)
+   * `jumpers`: jumper settings
  * 0x01: PIC ID
    * `length`: =9
    * 9*`mui`: PIC MUI

@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2018-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2018-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,11 +19,20 @@
 #ifndef LIB_UTILS_HTTPCLIENT_H_
 #define LIB_UTILS_HTTPCLIENT_H_
 
+#ifdef HAVE_CONFIG_H
+#  include <config.h>
+#endif
+
 #include <unistd.h>
 #include <cstdint>
 #include <string>
 #include "lib/utils/tcpsocket.h"
 
+#ifdef HAVE_SSL
+#  include <openssl/ssl.h>
+#  include <openssl/bio.h>
+#  include <openssl/err.h>
+#endif
 
 /** typedef for referencing @a sockaddr_in within namespace. */
 typedef struct sockaddr_in socketaddress;
@@ -35,6 +44,77 @@ namespace ebusd {
 using std::string;
 using std::ifstream;
 
+#ifdef HAVE_SSL
+class SSLSocket {
+ private:
+  /**
+   * Constructor.
+   * @param ctx the SSL_CTX for cleanup, or nullptr.
+   * @param bio the BIO instance, or nullptr.
+   * @param until the system time until the socket is allowed to be used.
+   */
+  SSLSocket(SSL_CTX *ctx, BIO *bio, time_t until) : m_ctx(ctx), m_bio(bio), m_until(until) {}
+
+ public:
+  /**
+   * Destructor.
+   */
+  virtual ~SSLSocket();
+
+  /**
+   * Connect to the host on the specified port.
+   * @param host the host name or ip address to connect to.
+   * @param port the port number.
+   * @param https true for HTTPS, false for HTTP.
+   * @param timeout the connect, send, and receive timeout in seconds, or 0 for blocking mode.
+   * @param caFile the CA file to use (uses defaults if neither caFile nor caPath are set), or "#" for insecure.
+   * @param caPath the path with CA files to use (uses defaults if neither caFile nor caPath are set).
+   * @return the connected SSLSocket, or nullptr on error.
+   */
+  static SSLSocket* connect(const string& server, const uint16_t& port, bool https, int timeout,
+                            const char* caFile = nullptr, const char* caPath = nullptr);
+
+  /**
+   * Write bytes to the socket.
+   * @param data the data to send.
+   * @param len number of bytes to send.
+   * @return number of bytes written, or -1 on error.
+   */
+  ssize_t send(const char* data, size_t len);
+
+  /**
+   * Read bytes from the socket.
+   * @param data the buffer for the received bytes.
+   * @param len size of the buffer.
+   * @return number of bytes read, or -1 on error.
+   */
+  ssize_t recv(char* data, size_t len);
+
+  /**
+   * Return whether the socket is still valid.
+   * @return true if the socket is still valid.
+   */
+  bool isValid();
+
+ private:
+  /** the SSL_CTX for cleanup, or nullptr. */
+  SSL_CTX *m_ctx;
+
+  /** the BIO instance for communication. */
+  BIO *m_bio;
+
+  /** the system time until the socket is allowed to be used. */
+  const time_t m_until;
+};
+
+#define SocketClass SSLSocket
+
+#else  // HAVE_SSL
+
+#define SocketClass TCPSocket
+
+#endif  // HAVE_SSL
+
 /**
  * Helper class for handling HTTP client requests.
  */
@@ -42,8 +122,19 @@ class HttpClient {
  public:
   /**
    * Constructor.
+   * @param caFile the CA file to use (uses defaults if neither caFile nor caPath are set), or "#" for insecure.
+   * @param caPath the path with CA files to use (uses defaults if neither caFile nor caPath are set).
    */
-  HttpClient() : m_port(0), m_timeout(0), m_socket(nullptr), m_bufferSize(0), m_buffer(nullptr) {}
+  explicit HttpClient(const char* caFile = nullptr, const char* caPath = nullptr) :
+#ifdef HAVE_SSL
+    m_https(false),
+    m_caFile(caFile),
+    m_caPath(caPath),
+#endif
+    m_socket(nullptr), m_port(0), m_timeout(0), m_bufferSize(0), m_buffer(nullptr)
+  {
+    initialize();
+  }
 
   /**
    * Destructor.
@@ -55,6 +146,11 @@ class HttpClient {
       m_buffer = nullptr;
     }
   }
+
+  /**
+   * Initialize HttpClient.
+   */
+  static void initialize();
 
   /**
    * Parse an HTTP URL.
@@ -71,11 +167,12 @@ class HttpClient {
    * Connect to the specified server.
    * @param host the host name to connect to.
    * @param port the port to connect to.
-   * @param timeout the timeout in seconds, defaults to 5 seconds.
+   * @param https true for HTTPS, false for HTTP.
    * @param userAgent the optional user agent to send in the request header.
+   * @param timeout the timeout in seconds, defaults to 5 seconds.
    * @return true on success, false on connect failure.
    */
-  bool connect(const string& host, uint16_t port, const string& userAgent = "", int timeout = 5);
+  bool connect(const string& host, uint16_t port, bool https = false, const string& userAgent = "", int timeout = 5);
 
   /**
    * Re-connect to the last specified server.
@@ -90,7 +187,7 @@ class HttpClient {
   bool ensureConnected();
 
   /**
-   * Disconnect from the servier.
+   * Disconnect from the server.
    */
   void disconnect();
 
@@ -132,11 +229,25 @@ class HttpClient {
    * @param result the string to append the read data to and in which to find the delimiter.
    * @return the position of the delimiter if delimiter was set or the number of bytes received, or string::npos if not found.
    */
-  size_t readUntil(const string& delim, const size_t length, string* result);
+  size_t readUntil(const string& delim, size_t length, string* result);
 
  private:
-  /** the @a TCPClient handling the traffic. */
-  TCPClient m_client;
+#ifdef HAVE_SSL
+  /** true once @a initialize() was called. */
+  static bool s_initialized;
+
+  /** true for HTTPS, false for HTTP. */
+  bool m_https;
+
+  /** the CA file to use. */
+  const char* m_caFile;
+
+  /** the path with CA files to use. */
+  const char* m_caPath;
+#endif
+
+  /** the currently connected socket. */
+  SocketClass* m_socket;
 
   /** the name of the host last successfully connected to. */
   string m_host;
@@ -149,9 +260,6 @@ class HttpClient {
 
   /** the optional user agent to send in the request header. */
   string m_userAgent;
-
-  /** the currently connected socket. */
-  TCPSocket* m_socket;
 
   /** the size of the @a m_buffer. */
   size_t m_bufferSize;

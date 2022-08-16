@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,7 +25,6 @@
 #include <deque>
 #include <map>
 #include <queue>
-#include <functional>
 #include "lib/ebus/data.h"
 #include "lib/ebus/result.h"
 #include "lib/ebus/symbol.h"
@@ -77,6 +76,7 @@ class Message : public AttributedItem {
  public:
   /**
    * Construct a new instance.
+   * @param filename the source filename.
    * @param circuit the optional circuit name.
    * @param level the optional access level.
    * @param name the message name (unique within the same circuit and type).
@@ -92,7 +92,7 @@ class Message : public AttributedItem {
    * @param pollPriority the priority for polling, or 0 for no polling at all.
    * @param condition the @a Condition for this message, or nullptr.
    */
-  Message(const string& circuit, const string& level, const string& name,
+  Message(const string& filename, const string& circuit, const string& level, const string& name,
       bool isWrite, bool isPassive, const map<string, string>& attributes,
       symbol_t srcAddress, symbol_t dstAddress,
       const vector<symbol_t>& id,
@@ -281,7 +281,7 @@ class Message : public AttributedItem {
   /**
    * Get the specified field name.
    * @param fieldIndex the index of the field (excluding ignored fields).
-   * @return the field name, or the index as string if not unique, or empty not available.
+   * @return the field name, or the index as string if not unique or not available.
    */
   string getFieldName(ssize_t fieldIndex) const { return m_data->getName(fieldIndex); }
 
@@ -525,6 +525,20 @@ class Message : public AttributedItem {
   time_t getCreateTime() const { return m_createTime; }
 
   /**
+   * Get the arbitrary state value for data handlers.
+   * @return the state value.
+   */
+  int getDataHandlerState() const { return m_dataHandlerState; }
+
+  /**
+   * Set the arbitrary state value for data handlers.
+   * @param state the new state value.
+   * @param addBits true to add the new state value bits to the existing state.
+   * @return true when the state was changed.
+   */
+  bool setDataHandlerState(int state, bool addBits = false);
+
+  /**
    * Get the time when this message was last seen with reasonable data.
    * @return the time when this message was last seen, or 0.
    */
@@ -572,7 +586,8 @@ class Message : public AttributedItem {
    * @param outputFormat the @a OutputFormat options.
    * @param output the @a ostream to append the formatted value to.
    */
-  virtual void dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output) const;
+  virtual void dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output)
+                         const;
 
   /**
    * Decode the message from the last stored data in JSON format.
@@ -587,6 +602,9 @@ class Message : public AttributedItem {
                           OutputFormat outputFormat, ostringstream* output) const;
 
  protected:
+  /** the source filename. */
+  const string m_filename;
+
   /** the optional circuit name. */
   const string m_circuit;
 
@@ -656,8 +674,11 @@ class Message : public AttributedItem {
   /** the last seen @a SlaveSymbolString. */
   SlaveSymbolString m_lastSlaveData;
 
-  /** the system time when the message was created. */
+  /** the system time when the message was created or changed in poll priority. */
   time_t m_createTime;
+
+  /** an arbitrary state for data handlers. */
+  int m_dataHandlerState;
 
   /** the system time when the message was last updated, 0 for never. */
   time_t m_lastUpdateTime;
@@ -680,6 +701,7 @@ class ChainedMessage : public Message {
  public:
   /**
    * Construct a new instance.
+   * @param filename the source filename.
    * @param circuit the optional circuit name.
    * @param level the optional access level.
    * @param name the message name (unique within the same circuit and type).
@@ -695,7 +717,7 @@ class ChainedMessage : public Message {
    * @param pollPriority the priority for polling, or 0 for no polling at all.
    * @param condition the @a Condition for this message, or nullptr.
    */
-  ChainedMessage(const string& circuit, const string& level, const string& name,
+  ChainedMessage(const string& filename, const string& circuit, const string& level, const string& name,
       bool isWrite, const map<string, string>& attributes,
       symbol_t srcAddress, symbol_t dstAddress,
       const vector<symbol_t>& id,
@@ -746,7 +768,8 @@ class ChainedMessage : public Message {
 
  protected:
   // @copydoc
-  void dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output) const override;
+  void dumpField(const string& fieldName, bool withConditions, OutputFormat outputFormat, ostream* output) const
+                 override;
 
 
  private:
@@ -776,7 +799,7 @@ class ChainedMessage : public Message {
 /**
  * A function that compares the weighted poll priority of two @a Message instances.
  */
-struct compareMessagePriority : binary_function<Message*, Message*, bool> {
+struct compareMessagePriority {
   /**
    * Compare the weighted poll priority of the two @a Message instances.
    * @param x the first @a Message.

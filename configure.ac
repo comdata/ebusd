@@ -43,6 +43,8 @@ AC_ARG_WITH(contrib, AS_HELP_STRING([--without-contrib], [disable inclusion of c
 if test "x$with_contrib" != "xno"; then
 	AC_DEFINE_UNQUOTED(HAVE_CONTRIB, [1], [Defined if contributed sources are enabled.])
 fi
+AC_ARG_WITH(ebusfeed, AS_HELP_STRING([--with-ebusfeed], [enable inclusion of ebusfeed tool]), [with_ebusfeed=yes], [])
+AM_CONDITIONAL([WITH_EBUSFEED], [test "x$with_ebusfeed" == "xyes"])
 AC_ARG_WITH(argp-lib, AS_HELP_STRING([--with-argp-lib=PATH], [path to argp libraries]), [LDFLAGS+="-L$with_argp_lib"])
 AC_ARG_WITH(argp-include, AS_HELP_STRING([--with-argp-include=PATH], [path to argp includes]), [CXXFLAGS+="-I$with_argp_include"])
 AC_CHECK_FUNC([argp_parse], [have_argp=yes], AC_CHECK_LIB([argp], [argp_parse], [have_argp=yes; LIBS="-largp $LIBS"], [have_argp=no]))
@@ -60,6 +62,18 @@ if test "x$with_mqtt" != "xno"; then
 		with_mqtt="no"])
 fi
 AM_CONDITIONAL([MQTT], [test "x$with_mqtt" != "xno"])
+
+AC_ARG_WITH(ssl, AS_HELP_STRING([--without-ssl], [disable support for SSL]), [], [with_ssl=yes])
+if test "x$with_ssl" != "xno"; then
+	AC_CHECK_LIB([ssl], [OPENSSL_init_ssl],
+		[AC_CHECK_LIB([crypto], [CRYPTO_new_ex_data],
+         		[AC_DEFINE_UNQUOTED(HAVE_SSL, [1], [Defined if SSL is enabled.])],
+         		[AC_MSG_RESULT([Could not find CRYPTO_new_ex_data in libcrypto.])
+         		with_ssl="no"])],
+		[AC_MSG_RESULT([Could not find SSL_library_init in libssl.])
+		with_ssl="no"])
+fi
+AM_CONDITIONAL([SSL], [test "x$with_ssl" != "xno"])
 
 AC_MSG_CHECKING([for direct float format conversion])
 AC_TRY_RUN(
@@ -121,8 +135,14 @@ AM_COND_IF([CONTRIB], [AC_CONFIG_FILES([
 AC_DEFINE_UNQUOTED(PACKAGE_PIDFILE, LOCALSTATEDIR "/run/" PACKAGE ".pid", [The path and name of the PID file.])
 AC_DEFINE_UNQUOTED(PACKAGE_LOGFILE, LOCALSTATEDIR "/log/" PACKAGE ".log", [The path and name of the log file.])
 AC_DEFINE(SCAN_VERSION, "[m4_esyscmd_s([sed -e 's#^\([0-9]*\.[0-9]*\).*#\1#' -e 's#\.\([0-9]\)$#0\1#' -e 's#\.##' VERSION])]", [The version of the package formatted for the scan result.])
-AC_DEFINE(REVISION, "[m4_esyscmd_s([git describe --always 2>/dev/null || (date +p%Y%m%d)])]", [The revision of the package.])
-
+AC_DEFINE(PACKAGE_VERSION_MAJOR, "[m4_esyscmd_s([sed -e 's#^\([0-9]*\)\..*$#\1#' VERSION])]", [The major version of the package.])
+AC_DEFINE(PACKAGE_VERSION_MINOR, "[m4_esyscmd_s([sed -e 's#^.*\.\([0-9]*\)$#\1#' VERSION])]", [The minor version of the package.])
+AC_ARG_VAR(GIT_REVISION, [Predefined value to use for revision instead of running git describe.])
+if test -n "$GIT_REVISION"; then
+	AC_DEFINE(REVISION, "[m4_esyscmd_s([echo "$GIT_REVISION"])]", [The revision of the package.])
+else
+	AC_DEFINE(REVISION, "[m4_esyscmd_s([git describe --always 2>/dev/null || (date +p%Y%m%d)])]", [The revision of the package.])
+fi
 AC_CHECK_PROGS([HAVE_DOXYGEN], [doxygen], [])
 if test -z "$HAVE_DOXYGEN"; then
 	AC_MSG_WARN([Doxygen not found - continuing without Doxygen support.])

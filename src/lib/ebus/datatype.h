@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -175,11 +175,28 @@ enum PartType {
 /** bit flag for @a DataType: numeric type with base class @a NumberDataType. */
 #define NUM 0x400
 
+/** bit flag for @a DataType: numeric type with base class @a DateTimeDataType. */
+#define DAT 0x800
+
 /** bit flag for @a DataType: special marker for certain types. */
-#define SPE 0x800
+#define SPE 0x1000
 
 /** bit flag for @a DataType: stored duplicate for backwards compatibility, not to be traversed in lists any more. */
-#define DUP 0x1000
+#define DUP 0x2000
+
+/**
+ * Parse a float value from the 32 bit representation (IEEE 754).
+ * @param value the 32 bit representation of the float value.
+ * @return the float value.
+ */
+float uintToFloat(unsigned int value);
+
+/**
+ * Format a float value to the 32 bit representation (IEEE 754).
+ * @param val the float value.
+ * @return the 32 bit representation of the float value, or 0xffffffff if NaN.
+ */
+uint32_t floatToUint(float val);
 
 /**
  * Base class for all kinds of data types.
@@ -364,7 +381,7 @@ class DateTimeDataType : public DataType {
    */
   DateTimeDataType(const string& id, size_t bitCount, uint16_t flags, unsigned int replacement,
       bool hasDate, bool hasTime, int16_t resolution)
-    : DataType(id, bitCount, flags, replacement), m_hasDate(hasDate), m_hasTime(hasTime),
+    : DataType(id, bitCount, flags|DAT, replacement), m_hasDate(hasDate), m_hasTime(hasTime),
       m_resolution(resolution == 0 ? 1 : resolution) {}
 
   /**
@@ -434,8 +451,8 @@ class NumberDataType : public DataType {
   NumberDataType(const string& id, size_t bitCount, uint16_t flags, unsigned int replacement,
       unsigned int minValue, unsigned int maxValue, int divisor,
       const NumberDataType* baseType = nullptr)
-    : DataType(id, bitCount, flags|NUM, replacement), m_minValue(minValue), m_maxValue(maxValue), m_divisor(divisor==0 ? 1 : divisor),
-      m_precision(calcPrecision(divisor)), m_firstBit(0), m_baseType(baseType) {}
+    : DataType(id, bitCount, flags|NUM, replacement), m_minValue(minValue), m_maxValue(maxValue),
+      m_divisor(divisor == 0 ? 1 : divisor), m_precision(calcPrecision(divisor)), m_firstBit(0), m_baseType(baseType) {}
 
   /**
    * Constructs a new instance for less than 8 bits.
@@ -449,8 +466,8 @@ class NumberDataType : public DataType {
    */
   NumberDataType(const string& id, size_t bitCount, uint16_t flags, unsigned int replacement,
       int16_t firstBit, int divisor, const NumberDataType* baseType = nullptr)
-    : DataType(id, bitCount, flags|NUM, replacement), m_minValue(0), m_maxValue((1 << bitCount)-1), m_divisor(divisor==0 ? 1 : divisor),
-      m_precision(0), m_firstBit(firstBit), m_baseType(baseType) {}
+    : DataType(id, bitCount, flags|NUM, replacement), m_minValue(0), m_maxValue((1 << bitCount)-1),
+      m_divisor(divisor == 0 ? 1 : divisor), m_precision(0), m_firstBit(firstBit), m_baseType(baseType) {}
 
   /**
    * Destructor.
@@ -491,6 +508,15 @@ class NumberDataType : public DataType {
   unsigned int getMaxValue() const { return m_maxValue; }
 
   /**
+   * Get the minimum or maximum value.
+   * @param getMax true for the maximum, false for the minimum.
+   * @param outputFormat the @a OutputFormat options to use.
+   * @param output the ostream to append the formatted value to.
+   * @return @a RESULT_OK on success, or an error code.
+   */
+  result_t getMinMax(bool getMax, const OutputFormat outputFormat, ostream* output) const;
+
+  /**
    * @return the divisor (negative for reciprocal).
    */
   int getDivisor() const { return m_divisor; }
@@ -512,6 +538,16 @@ class NumberDataType : public DataType {
   // @copydoc
   result_t readSymbols(size_t offset, size_t length, const SymbolString& input,
       const OutputFormat outputFormat, ostream* output) const override;
+
+  /**
+   * Internal method for interpreting a numeric raw value.
+   * @param value the numeric raw value.
+   * @param outputFormat the @a OutputFormat options to use.
+   * @param output the ostream to append the formatted value to.
+   * @return @a RESULT_OK on success, or an error code.
+   */
+  result_t readFromRawValue(unsigned int value,
+                            OutputFormat outputFormat, ostream* output) const;
 
   /**
    * Internal method for writing the numeric raw value to a @a SymbolString.

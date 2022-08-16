@@ -1,6 +1,6 @@
 /*
  * ebusd - daemon for communication with eBUS heating systems.
- * Copyright (C) 2014-2021 John Baier <ebusd@ebusd.eu>
+ * Copyright (C) 2014-2022 John Baier <ebusd@ebusd.eu>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -210,6 +210,12 @@ class DataField : public AttributedItem {
   virtual bool isSet() const { return false; }
 
   /**
+   * Return whether this is a @a ValueListDataField.
+   * @return true if this is a @a DataFieldSet.
+   */
+  virtual bool isList() const { return false; }
+
+  /**
    * Factory method for creating new instances.
    * @param isWriteMessage whether the field is part of a write message (default false).
    * @param isTemplate true for creating a template @a DataField.
@@ -266,7 +272,7 @@ class DataField : public AttributedItem {
   /**
    * Get the specified field name.
    * @param fieldIndex the index of the field (excluding ignored fields), or -1 for this.
-   * @return the field name, or the index as string is not unique or not available.
+   * @return the field name, or the index as string if not unique or not available.
    */
   virtual string getName(ssize_t fieldIndex) const = 0;
 
@@ -420,12 +426,12 @@ class SingleDataField : public DataField {
   size_t getCount(PartType partType = pt_any, const char* fieldName = nullptr) const override;
 
   // @copydoc
-  virtual string getName(ssize_t fieldIndex) const {
+  string getName(ssize_t fieldIndex) const override {
     return isIgnored() || fieldIndex > 0 ? "" : m_name;
   }
 
   // @copydoc
-  virtual const SingleDataField* getField(ssize_t fieldIndex) const {
+  const SingleDataField* getField(ssize_t fieldIndex) const override {
     if (isIgnored() || fieldIndex > 0) {
       return nullptr;
     }
@@ -535,6 +541,9 @@ class ValueListDataField : public SingleDataField {
   const ValueListDataField* clone() const override;
 
   // @copydoc
+  bool isList() const override { return true; }
+
+  // @copydoc
   result_t derive(const string& name, PartType partType, int divisor,
       const map<unsigned int, string>& values, map<string, string>* attributes,
       vector<const SingleDataField*>* fields) const override;
@@ -638,8 +647,8 @@ class DataFieldSet : public DataField {
    * @param name the field name.
    * @param fields the @a vector of @a SingleDataField instances part of this set.
    */
-  DataFieldSet(const string& name, const vector<const SingleDataField*> fields)
-    : DataField(name), m_fields(fields) {
+  DataFieldSet(const string& fieldName, const vector<const SingleDataField*> fields)
+    : DataField(fieldName), m_fields(fields) {
     bool uniqueNames = true;
     size_t ignoredCount = 0;
     map<string, string> names;
@@ -648,10 +657,12 @@ class DataFieldSet : public DataField {
         ignoredCount++;
         continue;
       }
+      if (!uniqueNames) {
+        continue;
+      }
       string name = field->getName(-1);
       if (name.empty() || names.find(name) != names.end()) {
         uniqueNames = false;
-        break;
       }
       names[name] = name;
     }

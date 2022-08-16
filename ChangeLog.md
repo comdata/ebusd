@@ -1,3 +1,67 @@
+# 22.4 (tbd)
+## Bug Fixes
+* fix some smaller glitches
+* fix revision in gh build for update check
+
+## Features
+* add continuation of initial scan until it succeeded
+
+
+# 22.3 (2022-05-08)
+## Bug Fixes
+* fix potential race condition in connection handling
+* fix ebusctl final read
+* fix missing MQTT topic prefix with "--mqttint=..."
+* fix weird SSL connect errors
+* fix for /decode endpoint
+* fix for Home Assistant MQTT discovery config to truncate long updatecheck string
+
+## Features
+* add timeout check to arbitration
+* add allow using older libmosquitto version
+* add "isreverse" to /datatype endpoint
+* add high speed serial mode to enhanced protocol
+* add support for flashing via network to ebuspicloader
+* add allow using "--mqttvar=..." multiple times to ease overriding integration settings
+
+
+# 22.2 (2022-02-27)
+## Bug Fixes
+* fix for reconnect in HTTPS client
+* fix for potentially truncated float representation
+* fix for unmatchable incoming MQTT topics
+* fix for non-JSON MQTT payload format
+
+## Features
+* add "--cafile" and "--capath" options with support for insecure HTTPS connections
+* add support for extra infos of current adapter 3 firmware
+* add option to send message dump to a file
+* add "--mqttjson=short" option for smaller message payload
+* add negative filtering to MQTT integration
+* add rewrite outdated config path with the new one
+
+
+# 22.1 (2022-02-12)
+## Bug Fixes
+* fix smaller bugs related to cleanup
+* add more device latency to unix build
+* fix for debian package overwriting previous conf files
+* fix for potentially truncated float representation
+* fix for determining unique field names in a message
+
+## Features
+* added arbitration delay setting to ebuspicloader
+* updated new location of config and update check web service
+* remove ebusfeed from regular build
+* add support for picking up environment variables as command line options
+* add support for generic MQTT integration by allowing publish of message definition content
+* add support for Home Assistant MQTT discovery feature
+* add Alpine Linux APKBUILD (thanks to tim-devel)
+* add QoS setting and adjustable global topic to MQTT
+* add option to move dynamic circuit and name parts to MQTT payload allowing to push to e.g. Azure IoT hub
+* add SSL support to HTTP client
+
+
 # 21.3 (2021-11-07)
 
 ## Bug Fixes

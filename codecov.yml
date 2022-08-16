@@ -27,3 +27,8 @@ comment:
   layout: "header, diff, changes, sunburst, uncovered"
   branches: null
   behavior: default
+
+ignore:
+  - src/tools/intelhex
+  - src/lib/ebus/test
+  - src/lib/ebus/contrib/test

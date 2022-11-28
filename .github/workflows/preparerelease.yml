@@ -18,8 +18,8 @@ on:
           - ''
           - amd64
           - '386'
-          - arm/v7
           - arm/v6
+          - arm/v7
           - arm64
       limitimg:
         description: Limit to this image

@@ -19,6 +19,7 @@
 #ifndef LIB_UTILS_CLOCK_H_
 #define LIB_UTILS_CLOCK_H_
 
+#include <stdint.h>
 #include <time.h>
 
 namespace ebusd {
@@ -30,6 +31,11 @@ namespace ebusd {
  * @param t the @a timespec in which to store the time.
  */
 void clockGettime(struct timespec* t);
+
+/**
+ * Get the current system time in milliseconds since the Epoch.
+ */
+uint64_t clockGetMillis();
 
 }  // namespace ebusd
 

@@ -187,9 +187,10 @@ enum PartType {
 /**
  * Parse a float value from the 32 bit representation (IEEE 754).
  * @param value the 32 bit representation of the float value.
+ * @param negative true if the value is negative.
  * @return the float value.
  */
-float uintToFloat(unsigned int value);
+float uintToFloat(unsigned int value, bool negative);
 
 /**
  * Format a float value to the 32 bit representation (IEEE 754).
@@ -538,6 +539,22 @@ class NumberDataType : public DataType {
   // @copydoc
   result_t readSymbols(size_t offset, size_t length, const SymbolString& input,
       const OutputFormat outputFormat, ostream* output) const override;
+
+  /**
+   * Convert the numeric raw value to its float representation (including optional divisor).
+   * @param value the numeric raw value.
+   * @param output the float variable to write the value to.
+   * @return @a RESULT_OK on success, or an error code.
+   */
+  result_t getFloatFromRawValue(unsigned int value, float* output) const;
+
+  /**
+   * Convert the float value to the numeric raw value (including optional divisor).
+   * @param value the float value.
+   * @param output the variable to write the numeric raw value to.
+   * @return @a RESULT_OK on success, or an error code.
+   */
+  result_t getRawValueFromFloat(float value, unsigned int* output) const;
 
   /**
    * Internal method for interpreting a numeric raw value.

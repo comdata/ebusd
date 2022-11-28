@@ -283,6 +283,8 @@ class Device {
   /** the opened file descriptor, or -1. */
   int m_fd;
 
+  /** whether the reset of an enhanced device was already requested. */
+  bool m_resetRequested;
 
  private:
   /** the @a DeviceListener, or nullptr. */
@@ -350,7 +352,8 @@ class SerialDevice : public Device {
    */
   SerialDevice(const char* name, bool checkDevice, unsigned int extraLatency, bool readOnly, bool initialSend,
                bool enhancedProto = false, bool enhancedHighSpeed = false)
-    : Device(name, checkDevice, extraLatency, readOnly, initialSend, enhancedProto), m_enhancedHighSpeed(enhancedHighSpeed) {
+    : Device(name, checkDevice, extraLatency, readOnly, initialSend, enhancedProto),
+    m_enhancedHighSpeed(enhancedHighSpeed) {
   }
 
   // @copydoc

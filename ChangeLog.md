@@ -1,10 +1,24 @@
-# 22.4 (tbd)
-## Bug Fixes
-* fix some smaller glitches
-* fix revision in gh build for update check
+# next (tbd)
+## Buf Fixes
+* fix potentially invalid settings picked up from environment variables
+* fix potentially unnecessary arbitration start for non-enhanced proto
+* fix smaller issues in KNX integration
 
 ## Features
-* add continuation of initial scan until it succeeded
+* add support for setting visual ping and IP gateway to ebuspicloader
+
+
+# 22.4 (2022-09-18)
+## Bug Fixes
+* fix some smaller glitches (short argument names, compilation on small devices, argument help)
+* fix revision in gh build for update check
+* fix for include instruction without subdirectory
+* add timeout to network device connection
+
+## Features
+* add continuation to initial scan until succeeded as well as repetition to incomplete regular scan
+* add restart of enhanced device state when connection was reset
+* add KNX integration via KNXnet/IP multicast routing and optionally via knxd client
 
 
 # 22.3 (2022-05-08)

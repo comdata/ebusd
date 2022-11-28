@@ -41,6 +41,7 @@ using std::setfill;
 using std::setprecision;
 using std::setw;
 using std::endl;
+using std::isfinite;
 
 
 float uintToFloat(unsigned int value, bool negative) {
@@ -793,10 +794,78 @@ result_t NumberDataType::readSymbols(size_t offset, size_t length, const SymbolS
   return readFromRawValue(value, outputFormat, output);
 }
 
+result_t NumberDataType::getFloatFromRawValue(unsigned int value, float* output) const {
+  if (!hasFlag(REQ) && value == m_replacement) {
+    return RESULT_EMPTY;
+  }
+
+  bool negative;
+  if (hasFlag(SIG)) {  // signed value
+    negative = (value & (1 << (m_bitCount - 1))) != 0;
+    if (!hasFlag(EXP)) {
+      if (negative) {  // negative signed value
+        if (value < m_minValue) {
+          return RESULT_ERR_OUT_OF_RANGE;  // value out of range
+        }
+      } else if (value > m_maxValue) {
+        return RESULT_ERR_OUT_OF_RANGE;  // value out of range
+      }
+    }
+  } else if (value < m_minValue || value > m_maxValue) {
+    return RESULT_ERR_OUT_OF_RANGE;  // value out of range
+  } else {
+    negative = false;
+  }
+  int signedValue;
+  if (m_bitCount == 32) {
+    if (hasFlag(EXP)) {  // IEEE 754 binary32
+      float val = uintToFloat(value, negative);
+      if (!isfinite(val)) {
+        return RESULT_EMPTY;
+      }
+      if (val != 0.0) {
+        if (m_divisor < 0) {
+          val *= static_cast<float>(-m_divisor);
+          if (!isfinite(val)) {
+            // reached beyond infinity
+            return RESULT_ERR_OUT_OF_RANGE;
+          }
+        } else if (m_divisor > 1) {
+          val /= static_cast<float>(m_divisor);
+        }
+      }
+      *output = static_cast<float>(val);
+      return RESULT_OK;
+    }
+    if (!negative) {
+      if (m_divisor < 0) {
+        *output = static_cast<float>(value) * static_cast<float>(-m_divisor);
+      } else if (m_divisor <= 1) {
+        *output = static_cast<float>(value);
+      } else {
+        *output = static_cast<float>(value) / static_cast<float>(m_divisor);
+      }
+      return RESULT_OK;
+    }
+    signedValue = static_cast<int>(value);  // negative signed value
+  } else if (negative) {  // negative signed value
+    signedValue = static_cast<int>(value) - (1 << m_bitCount);
+  } else {
+    signedValue = static_cast<int>(value);
+  }
+  if (m_divisor < 0) {
+    *output = static_cast<float>(signedValue) * static_cast<float>(-m_divisor);
+  } else if (m_divisor <= 1) {
+    *output = static_cast<float>(signedValue);
+  } else {
+    *output = static_cast<float>(signedValue) / static_cast<float>(m_divisor);
+  }
+  return RESULT_OK;
+}
+
 result_t NumberDataType::readFromRawValue(unsigned int value,
                                           OutputFormat outputFormat, ostream* output) const {
   size_t length = (m_bitCount < 8) ? 1 : (m_bitCount/8);
-  int signedValue;
   // initialize output
   *output << setw(0) << std::resetiosflags(output->flags()) << dec << std::skipws << setprecision(6);
 
@@ -812,22 +881,25 @@ result_t NumberDataType::readFromRawValue(unsigned int value,
   bool negative;
   if (hasFlag(SIG)) {  // signed value
     negative = (value & (1 << (m_bitCount - 1))) != 0;
-    if (negative) {  // negative signed value
-      if (value < m_minValue) {
+    if (!hasFlag(EXP)) {
+      if (negative) {  // negative signed value
+        if (value < m_minValue) {
+          return RESULT_ERR_OUT_OF_RANGE;  // value out of range
+        }
+      } else if (value > m_maxValue) {
         return RESULT_ERR_OUT_OF_RANGE;  // value out of range
       }
-    } else if (value > m_maxValue) {
-      return RESULT_ERR_OUT_OF_RANGE;  // value out of range
     }
   } else if (value < m_minValue || value > m_maxValue) {
     return RESULT_ERR_OUT_OF_RANGE;  // value out of range
   } else {
     negative = false;
   }
+  int signedValue;
   if (m_bitCount == 32) {
     if (hasFlag(EXP)) {  // IEEE 754 binary32
       float val = uintToFloat(value, negative);
-      if (val != val) {  // !isnan(val)
+      if (!isfinite(val)) {
         if (outputFormat & OF_JSON) {
           *output << "null";
         } else {
@@ -838,6 +910,10 @@ result_t NumberDataType::readFromRawValue(unsigned int value,
       if (val != 0.0) {
         if (m_divisor < 0) {
           val *= static_cast<float>(-m_divisor);
+          if (!isfinite(val)) {
+            // reached beyond infinity
+            return RESULT_ERR_OUT_OF_RANGE;
+          }
         } else if (m_divisor > 1) {
           val /= static_cast<float>(m_divisor);
         }
@@ -929,6 +1005,75 @@ result_t NumberDataType::writeRawValue(unsigned int value, size_t offset, size_t
   if (usedLength != nullptr) {
     *usedLength = length;
   }
+  return RESULT_OK;
+}
+
+result_t NumberDataType::getRawValueFromFloat(float val, unsigned int* output) const {
+  unsigned int value;
+  if (hasFlag(EXP)) {  // IEEE 754 binary32
+    double dvalue = val;
+    if (m_divisor < 0) {
+      dvalue /= -m_divisor;
+    } else if (m_divisor > 1) {
+      dvalue *= m_divisor;
+    }
+    value = floatToUint(static_cast<float>(dvalue));
+    if (value == 0xffffffff) {
+      return RESULT_ERR_INVALID_NUM;
+    }
+  } else {
+    if (m_divisor == 1) {
+      if (hasFlag(SIG)) {
+        long signedValue = static_cast<long>(val);  // TODO static_c?
+        if (signedValue < 0 && m_bitCount != 32) {
+          value = (unsigned int)(signedValue + (1 << m_bitCount));
+        } else {
+          value = (unsigned int)signedValue;
+        }
+      } else if (val < 0) {
+        return RESULT_ERR_INVALID_NUM;  // invalid value
+      } else {
+        value = static_cast<unsigned int>(val);
+      }
+    } else {
+      double dvalue = val;
+      if (m_divisor < 0) {
+        dvalue = round(dvalue / -m_divisor);
+      } else {
+        dvalue = round(dvalue * m_divisor);
+      }
+      int length = static_cast<int>(m_bitCount/8);
+      if (hasFlag(SIG)) {
+        if (dvalue < -exp2((8 * static_cast<double>(length)) - 1)
+            || dvalue >= exp2((8 * static_cast<double>(length)) - 1)) {
+          return RESULT_ERR_OUT_OF_RANGE;  // value out of range
+        }
+        if (dvalue < 0 && m_bitCount != 32) {
+          value = static_cast<unsigned int>(dvalue + (1 << m_bitCount));
+        } else {
+          value = static_cast<unsigned int>(dvalue);
+        }
+      } else {
+        if (dvalue < 0.0 || dvalue >= exp2(8 * static_cast<double>(length))) {
+          return RESULT_ERR_OUT_OF_RANGE;  // value out of range
+        }
+        value = (unsigned int)dvalue;
+      }
+    }
+
+    if (hasFlag(SIG)) {  // signed value
+      if ((value & (1 << (m_bitCount - 1))) != 0) {  // negative signed value
+        if (value < m_minValue) {
+          return RESULT_ERR_OUT_OF_RANGE;  // value out of range
+        }
+      } else if (value > m_maxValue) {
+        return RESULT_ERR_OUT_OF_RANGE;  // value out of range
+      }
+    } else if (value < m_minValue || value > m_maxValue) {
+      return RESULT_ERR_OUT_OF_RANGE;  // value out of range
+    }
+  }
+  *output = value;
   return RESULT_OK;
 }
 
@@ -1100,9 +1245,9 @@ DataTypeList::DataTypeList() {
   // signed number (fraction 1/1000), -32.767 - +32.767, big endian
   add(new NumberDataType("FLR", 16, SIG|REV, 0x8000, 0x8001, 0x7fff, 1000));
   // signed number (IEEE 754 binary32: 1 bit sign, 8 bits exponent, 23 bits significand), little endian
-  add(new NumberDataType("EXP", 32, SIG|EXP, 0x7f800000, 0x00000000, 0xffffffff, 1));
+  add(new NumberDataType("EXP", 32, SIG|EXP, 0x7f800000, 0xfeffffff, 0x7effffff, 1));
   // signed number (IEEE 754 binary32: 1 bit sign, 8 bits exponent, 23 bits significand), big endian
-  add(new NumberDataType("EXR", 32, SIG|EXP|REV, 0x7f800000, 0x00000000, 0xffffffff, 1));
+  add(new NumberDataType("EXR", 32, SIG|EXP|REV, 0x7f800000, 0xfeffffff, 0x7effffff, 1));
   // unsigned integer, 0 - 65534, little endian
   add(new NumberDataType("UIN", 16, 0, 0xffff, 0, 0xfffe, 1));
   // unsigned integer, 0 - 65534, big endian

@@ -108,6 +108,7 @@ result_t ScanRequest::prepare(symbol_t ownMasterAddress) {
 
 bool ScanRequest::notify(result_t result, const SlaveSymbolString& slave) {
   symbol_t dstAddress = m_master[1];
+  m_busHandler->setScanResult(dstAddress, 0, "");
   if (result == RESULT_OK) {
     if (m_message == m_messageMap->getScanMessage()) {
       Message* message = m_messageMap->getScanMessage(dstAddress);
@@ -784,7 +785,7 @@ result_t BusHandler::handleSymbol() {
       // check arbitration
       if (recvSymbol == sendSymbol) {  // arbitration successful
         // measure arbitration delay
-        long long latencyLong = (sentTime.tv_sec*1000000000 + sentTime.tv_nsec
+        int64_t latencyLong = (sentTime.tv_sec*1000000000 + sentTime.tv_nsec
         - m_lastSynReceiveTime.tv_sec*1000000000 - m_lastSynReceiveTime.tv_nsec)/1000;
         if (latencyLong >= 0 && latencyLong <= 10000) {  // skip clock skew or out of reasonable range
           auto latency = static_cast<int>(latencyLong);
@@ -1093,9 +1094,13 @@ result_t BusHandler::setState(BusState state, result_t result, bool firstRepetit
     logDebug(lf_bus, "switching from %s to %s", getStateCode(m_state), getStateCode(state));
   }
   if (state == bs_noSignal) {
-    logError(lf_bus, "signal lost");
+    if (m_generateSynInterval == 0 || m_state != bs_skip) {
+      logError(lf_bus, "signal lost");
+    }
   } else if (m_state == bs_noSignal) {
-    logNotice(lf_bus, "signal acquired");
+    if (m_generateSynInterval == 0 || state != bs_skip) {
+      logNotice(lf_bus, "signal acquired");
+    }
   }
   m_state = state;
 
@@ -1113,7 +1118,7 @@ result_t BusHandler::setState(BusState state, result_t result, bool firstRepetit
 }
 
 void BusHandler::measureLatency(struct timespec* sentTime, struct timespec* recvTime) {
-  long long latencyLong = (recvTime->tv_sec*1000000000 + recvTime->tv_nsec
+  int64_t latencyLong = (recvTime->tv_sec*1000000000 + recvTime->tv_nsec
       - sentTime->tv_sec*1000000000 - sentTime->tv_nsec)/1000000;
   if (latencyLong < 0 || latencyLong > 1000) {
     return;  // clock skew or out of reasonable range
@@ -1476,6 +1481,8 @@ void BusHandler::formatSeenInfo(ostringstream* output) const {
           *output << "\"";
         }
       }
+    } else if ((m_seenAddresses[address]&SCAN_INIT) != 0) {
+      *output << ", scanning";
     }
     const vector<string>& loadedFiles = m_messages->getLoadedFiles(address);
     if (!loadedFiles.empty()) {
@@ -1677,7 +1684,7 @@ void BusHandler::formatGrabResult(bool unknown, OutputFormat outputFormat, ostri
   }
 }
 
-symbol_t BusHandler::getNextScanAddress(symbol_t lastAddress) const {
+symbol_t BusHandler::getNextScanAddress(symbol_t lastAddress, bool withUnfinished) const {
   if (lastAddress == SYN) {
     return SYN;
   }
@@ -1685,14 +1692,16 @@ symbol_t BusHandler::getNextScanAddress(symbol_t lastAddress) const {
     if (!isValidAddress(lastAddress, false) || isMaster(lastAddress)) {
       continue;
     }
-    if ((m_seenAddresses[lastAddress]&(SEEN|LOAD_INIT)) == SEEN) {
+    if ((m_seenAddresses[lastAddress]&(SEEN|LOAD_INIT)) == SEEN
+    || (withUnfinished && (m_seenAddresses[lastAddress]&(SEEN|SCAN_DONE|LOAD_INIT)) == (SEEN|LOAD_INIT))) {
       return lastAddress;
     }
     symbol_t master = getMasterAddress(lastAddress);
     if (master == SYN || (m_seenAddresses[master]&SEEN) == 0) {
       continue;
     }
-    if ((m_seenAddresses[lastAddress]&LOAD_INIT) == 0) {
+    if ((m_seenAddresses[lastAddress]&LOAD_INIT) == 0
+    || (withUnfinished && (m_seenAddresses[lastAddress]&(SCAN_DONE|LOAD_INIT)) == LOAD_INIT)) {
       return lastAddress;
     }
   }

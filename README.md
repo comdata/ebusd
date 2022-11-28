@@ -7,13 +7,13 @@ ebusd is a daemon for handling communication with eBUS devices connected to a
 2-wire bus system ("energy bus" used by numerous heating systems).
 
 [![Build](https://github.com/john30/ebusd/actions/workflows/build.yml/badge.svg)](https://github.com/john30/ebusd/actions/workflows/build.yml)
-[![Coverage](https://github.com/john30/ebusd/actions/workflows/coverage.yml/badge.svg)](https://github.com/john30/ebusd/actions/workflows/coverage.yml)
 [![codecov](https://codecov.io/gh/john30/ebusd/branch/master/graph/badge.svg)](https://codecov.io/gh/john30/ebusd)
 [![Release Downloads](https://img.shields.io/github/downloads/john30/ebusd/total)](https://github.com/john30/ebusd/releases/latest)
 [![Docker Downloads](https://img.shields.io/docker/pulls/john30/ebusd)](https://hub.docker.com/repository/docker/john30/ebusd)
 [![Release](https://img.shields.io/github/v/release/john30/ebusd)](https://github.com/john30/ebusd/releases/latest)
 [![GitHub Discussions](https://img.shields.io/github/discussions/john30/ebusd)](https://github.com/john30/ebusd/discussions)
 [![Sponsors](https://img.shields.io/github/sponsors/john30)](https://github.com/sponsors/john30)
+[![Donate](https://img.shields.io/badge/donate-pp.me/ebusd-blue)](https://paypal.me/ebusd)
 
 Features
 --------
@@ -21,7 +21,7 @@ Features
 The main features of the daemon are:
 
  * use one of these device connections:
-   * USB serial
+   * serial (via USB or integrated UART)
    * TCP
    * UDP
    * enhanced ebusd protocol allowing arbitration to be done directly by the hardware, e.g. for recent
@@ -45,6 +45,7 @@ The main features of the daemon are:
  * publish received data to [MQTT topics](https://github.com/john30/ebusd/wiki/3.3.-MQTT-client) and vice versa (if authorized)
  * announce [message definitions and status by MQTT](https://github.com/john30/ebusd/wiki/MQTT-integration) to e.g. integrate with [Home Assistant](https://www.home-assistant.io/) using [MQTT Discovery](https://www.home-assistant.io/docs/mqtt/discovery/)
  * support MQTT publish to [Azure IoT hub](https://docs.microsoft.com/en-us/azure/iot-hub/) (see [MQTT integration](https://github.com/john30/ebusd/wiki/MQTT-integration))
+ * act as a [KNX device](https://github.com/john30/ebusd/wiki/3.4.-KNX-device) by publishing received data to KNX groups and answer to read/write requests from KNX, i.e. build an eBUS-KNX bridge
  * [user authentication](https://github.com/john30/ebusd/wiki/3.1.-TCP-client-commands#auth) via [ACL file](https://github.com/john30/ebusd/wiki/2.-Run#daemon-options) for access control to certain messages
 
 
@@ -58,7 +59,7 @@ or pick the [package from the Alpine Linux repository](https://pkgs.alpinelinux.
 build it yourself, or use a docker image (see below).
 
 Building ebusd from the source requires the following packages and/or features:
- * autoconf (>=2.63) + automake (>=1.11) or cmake
+ * autoconf (>=2.63) + automake (>=1.11) or cmake (>=3.7.1)
  * g++ with C++11 support (>=4.8.1)
  * make
  * kernel with pselect or ppoll support
